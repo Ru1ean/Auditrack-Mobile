@@ -123,11 +123,7 @@ export default function OfficePersonnelScreen() {
 
   const [saving, setSaving] = useState(false);
 
-  useEffect(() => {
-    loadAllData();
-  }, []);
-
-  const loadAllData = async () => {
+  async function loadAllData() {
     setLoading(true);
     try {
       const [headsRes, officesRes, usersRes, meRes] = await Promise.all([
@@ -150,7 +146,13 @@ export default function OfficePersonnelScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadAllData();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -423,8 +425,8 @@ export default function OfficePersonnelScreen() {
 
   const saveEdit = async () => {
     if (!editHead?.HeadID) return;
-    if (!editForm.FirstName.trim() || !editForm.LastName.trim() || !editForm.Position.trim()) {
-      Alert.alert('Missing info', 'First name, last name, and position are required.');
+    if (!editForm.Position.trim()) {
+      Alert.alert('Missing info', 'Position is required.');
       return;
     }
 

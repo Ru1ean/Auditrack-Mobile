@@ -17,10 +17,6 @@ export default function EventsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    loadEvents();
-  }, []);
-
   const loadEvents = async () => {
     setLoading(true);
     try {
@@ -34,6 +30,12 @@ export default function EventsScreen() {
       setRefreshing(false);
     }
   };
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadEvents();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);

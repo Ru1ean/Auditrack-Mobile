@@ -3,6 +3,8 @@ import React, { useState } from 'react';
 import { Alert, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { usersAPI } from '../components/connect';
 
+const COMPANY_EMAIL_DOMAIN = '@lccbonline.edu.ph';
+
 export default function RegisterScreen() {
   const [formData, setFormData] = useState({
     first_name: '',
@@ -15,10 +17,49 @@ export default function RegisterScreen() {
   });
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [emailError, setEmailError] = useState('');
   const router = useRouter();
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));
+
+    if (field === 'password') {
+      validatePassword(value);
+    }
+
+    if (field === 'email') {
+      validateEmail(value);
+    }
+  };
+
+  const validateEmail = (email: string) => {
+    const normalizedEmail = email.trim().toLowerCase();
+
+    if (!normalizedEmail.endsWith(COMPANY_EMAIL_DOMAIN)) {
+      setEmailError(`Email must use the ${COMPANY_EMAIL_DOMAIN} domain`);
+      return false;
+    }
+
+    setEmailError('');
+    return true;
+  };
+
+  const validatePassword = (password: string) => {
+    const numberCount = (password.match(/\d/g) || []).length;
+
+    if (password.length < 8) {
+      setPasswordError('Password must be at least 8 characters long');
+      return false;
+    }
+
+    if (numberCount < 3) {
+      setPasswordError('Password must contain at least 3 numbers');
+      return false;
+    }
+
+    setPasswordError('');
+    return true;
   };
 
   const handleRegister = async () => {
@@ -36,6 +77,16 @@ export default function RegisterScreen() {
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters');
+      return;
+    }
+
+    if (!validateEmail(email)) {
+      setError(`Only ${COMPANY_EMAIL_DOMAIN} email addresses can register`);
+      return;
+    }
+
+    if (!validatePassword(password)) {
+      setError('Please fix the password errors before submitting');
       return;
     }
 
@@ -111,17 +162,7 @@ export default function RegisterScreen() {
             editable={!loading}
             placeholderTextColor="#999"
           />
-
-          <Text style={styles.label}>Contact Number</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter contact number"
-            value={formData.contact_number}
-            onChangeText={(val) => handleInputChange('contact_number', val)}
-            keyboardType="phone-pad"
-            editable={!loading}
-            placeholderTextColor="#999"
-          />
+          <Text style={styles.helperText}>{emailError || `Use your ${COMPANY_EMAIL_DOMAIN} email address`}</Text>
 
           <Text style={styles.label}>Password *</Text>
           <TextInput
@@ -133,22 +174,14 @@ export default function RegisterScreen() {
             editable={!loading}
             placeholderTextColor="#999"
           />
-
-          <Text style={styles.label}>Confirm Password *</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Confirm password"
-            value={formData.confirmPassword}
-            onChangeText={(val) => handleInputChange('confirmPassword', val)}
-            secureTextEntry
-            editable={!loading}
-            placeholderTextColor="#999"
-          />
+          <Text style={styles.helperText}>
+            {passwordError || 'Password must be at least 8 characters and contain at least 3 numbers'}
+          </Text>
 
           <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
+            style={[styles.button, loading || passwordError || emailError ? styles.buttonDisabled : null]}
             onPress={handleRegister}
-            disabled={loading}
+            disabled={loading || Boolean(passwordError) || Boolean(emailError)}
           >
             <Text style={styles.buttonText}>{loading ? 'Creating Account...' : 'Register'}</Text>
           </TouchableOpacity>
@@ -235,5 +268,11 @@ const styles = StyleSheet.create({
     backgroundColor: '#fee2e2',
     borderRadius: 6,
     fontSize: 14,
+  },
+  helperText: {
+    marginTop: -8,
+    marginBottom: 16,
+    fontSize: 12,
+    color: '#6b7280',
   },
 });

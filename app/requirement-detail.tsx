@@ -9,11 +9,7 @@ export default function RequirementDetailScreen() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  useEffect(() => {
-    if (id) loadRequirementDetails();
-  }, [id]);
-
-  const loadRequirementDetails = async () => {
+  async function loadRequirementDetails() {
     setLoading(true);
     try {
       const response = await requirementsAPI.getMyAssignments();
@@ -27,7 +23,15 @@ export default function RequirementDetailScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    if (id) {
+      void Promise.resolve().then(() => {
+        loadRequirementDetails();
+      });
+    }
+  }, [id]);
 
   if (loading) {
     return (

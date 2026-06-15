@@ -16,11 +16,7 @@ export default function EditProfileScreen() {
   const [userId, setUserId] = useState('');
   const router = useRouter();
 
-  useEffect(() => {
-    loadProfile();
-  }, []);
-
-  const loadProfile = async () => {
+  async function loadProfile() {
     try {
       const userStr = await AsyncStorage.getItem('user');
       if (userStr) {
@@ -38,7 +34,13 @@ export default function EditProfileScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadProfile();
+    });
+  }, []);
 
   const handleInputChange = (field: string, value: string) => {
     setFormData((prev) => ({ ...prev, [field]: value }));

@@ -9,11 +9,7 @@ export default function EventDetailScreen() {
   const [loading, setLoading] = useState(true);
   const router = useRouter();
 
-  useEffect(() => {
-    if (id) loadEventDetails();
-  }, [id]);
-
-  const loadEventDetails = async () => {
+  async function loadEventDetails() {
     setLoading(true);
     try {
       const response = await eventsAPI.getAllEvents();
@@ -25,7 +21,15 @@ export default function EventDetailScreen() {
     } finally {
       setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    if (id) {
+      void Promise.resolve().then(() => {
+        loadEventDetails();
+      });
+    }
+  }, [id]);
 
   if (loading) {
     return (

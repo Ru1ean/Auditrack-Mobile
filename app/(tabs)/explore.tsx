@@ -95,11 +95,7 @@ export default function UsersScreen() {
   const [newRoleID, setNewRoleID] = useState(2);
   const [updating, setUpdating] = useState(false);
 
-  useEffect(() => {
-    loadUsers();
-  }, []);
-
-  const loadUsers = async () => {
+  async function loadUsers() {
     setLoading(true);
     try {
       const response = await usersAPI.getAllUsers();
@@ -118,7 +114,13 @@ export default function UsersScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadUsers();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);

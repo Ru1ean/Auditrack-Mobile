@@ -28,11 +28,7 @@ export default function EventsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  async function loadData() {
     setLoading(true);
     try {
       const [eventsRes, foldersRes] = await Promise.all([
@@ -62,7 +58,13 @@ export default function EventsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadData();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);

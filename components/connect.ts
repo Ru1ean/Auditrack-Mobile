@@ -1,11 +1,27 @@
 // api.ts
 
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { File, UploadType } from 'expo-file-system';
 import { Platform } from 'react-native';
 
-// 🔥 CHANGE THIS ONLY when your IP changes
+// Change this only when your API host changes.
 
-export const BASE_URL = 'http://192.168.1.6:5000/api';
+const DEFAULT_API_BASE_URL = 'http://192.168.1.4:5000';
+
+const normalizeBaseUrl = (url: string) => url.trim().replace(/\/+$/, '');
+
+export const API_BASE_URL = normalizeBaseUrl(
+  DEFAULT_API_BASE_URL
+);
+
+export const BASE_URL = API_BASE_URL.endsWith('/api')
+  ? API_BASE_URL
+  : `${API_BASE_URL}/api`;
+
+export const apiUrl = (endpoint = '') => {
+  const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
+  return `${BASE_URL}${normalizedEndpoint}`;
+};
 
 // 🔑 Unified token getter (works on web + mobile)
 const getToken = async (): Promise<string | null> => {
@@ -19,6 +35,11 @@ const getToken = async (): Promise<string | null> => {
     console.log('TOKEN ERROR:', err);
     return null;
   }
+};
+
+export const getAuthHeaders = async (): Promise<Record<string, string>> => {
+  const token = await getToken();
+  return token ? { Authorization: `Bearer ${token}` } : {};
 };
 
 // 🔑 Unified token setter
@@ -48,7 +69,7 @@ const request = async (
   try {
     const token = await getToken();
 
-    const res = await fetch(`${BASE_URL}${endpoint}`, {
+    const res = await fetch(apiUrl(endpoint), {
       method,
       headers: {
         'Content-Type': 'application/json',
@@ -59,6 +80,106 @@ const request = async (
 
     const text = await res.text();
     console.log('API RAW RESPONSE:', text);
+    let json;
+    try {
+      json = JSON.parse(text);
+    } catch (e) {
+      console.log('API JSON ERROR:', e);
+      throw new Error('Invalid JSON response from server.');
+    }
+
+    if (!res.ok) {
+      throw new Error(json.message || 'Request failed');
+    }
+
+    return json;
+  } catch (error: any) {
+    console.log('API ERROR:', error.message);
+    throw error;
+  }
+};
+
+type UploadUserFileInput = {
+  fileUri: string;
+  fileName: string;
+  mimeType?: string;
+  requirementId: string;
+  userId: string;
+};
+
+const parseUploadResponse = (body: string, status: number) => {
+  let json;
+  try {
+    json = JSON.parse(body);
+  } catch (e) {
+    console.log('API JSON ERROR:', e);
+    throw new Error('Invalid JSON response from server.');
+  }
+
+  if (status < 200 || status >= 300) {
+    throw new Error(json.message || 'Request failed');
+  }
+
+  return json;
+};
+
+const uploadUserFileRequest = async ({
+  fileUri,
+  fileName,
+  mimeType,
+  requirementId,
+  userId,
+}: UploadUserFileInput) => {
+  const token = await getToken();
+  const endpoint = '/requirements/user-upload';
+
+  if (Platform.OS === 'web') {
+    const formData = new FormData();
+    const fileResponse = await fetch(fileUri);
+    const blob = await fileResponse.blob();
+    formData.append('file', blob, fileName);
+    formData.append('userId', userId);
+    formData.append('requirementId', requirementId);
+    return requestFormData(endpoint, formData, 'POST');
+  }
+
+  const file = new File(fileUri);
+  const result = await file.upload(apiUrl(endpoint), {
+    uploadType: UploadType.MULTIPART,
+    fieldName: 'file',
+    mimeType: mimeType || 'application/octet-stream',
+    parameters: {
+      userId,
+      requirementId,
+    },
+    headers: {
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+  });
+
+  console.log('API RAW RESPONSE:', result.body);
+  return parseUploadResponse(result.body, result.status);
+};
+
+const requestFormData = async (
+  endpoint: string,
+  formData: FormData,
+  method: string = 'POST'
+) => {
+  try {
+    const token = await getToken();
+
+    const res = await fetch(apiUrl(endpoint), {
+      method,
+      headers: {
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: formData,
+    });
+
+    const text = await res.text();
+    console.log('API RAW RESPONSE:', text);
+
     let json;
     try {
       json = JSON.parse(text);
@@ -174,6 +295,10 @@ export const requirementsAPI = {
   },
   updateUserUploadStatus: async (assignmentId: string, hasUploaded: boolean) => {
     return await request(`/requirements/assignment/${assignmentId}/upload-status`, 'PUT', { hasUploaded });
+  },
+  uploadUserFile: uploadUserFileRequest,
+  deleteUserFile: async (requirementId: string, userId: string) => {
+    return await request(`/requirements/${requirementId}/file/${userId}`, 'DELETE');
   },
   getUserFile: async (requirementId: string, userId: string) => {
     try {

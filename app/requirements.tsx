@@ -17,11 +17,7 @@ export default function RequirementsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const router = useRouter();
 
-  useEffect(() => {
-    loadRequirements();
-  }, []);
-
-  const loadRequirements = async () => {
+  async function loadRequirements() {
     setLoading(true);
     try {
       const response = await requirementsAPI.getMyAssignments();
@@ -33,7 +29,13 @@ export default function RequirementsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadRequirements();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);

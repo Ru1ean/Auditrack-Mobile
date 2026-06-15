@@ -8,11 +8,7 @@ export default function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  const loadData = async () => {
+  async function loadData() {
     setLoading(true);
     try {
       const userRes = await usersAPI.getLoggedInUser();
@@ -32,7 +28,13 @@ export default function HomeScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    void Promise.resolve().then(() => {
+      loadData();
+    });
+  }, []);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -187,4 +189,3 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 });
-

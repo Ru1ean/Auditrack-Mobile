@@ -24,7 +24,7 @@ export default function LoginScreen() {
 
       if (response.success) {
         await setToken(response.token);
-        router.replace('/(tabs)');
+        router.replace('/(tabs)/profile');
       } else {
         if (response.approvalStatus === 'pending') {
           setError('Your account is pending approval.');

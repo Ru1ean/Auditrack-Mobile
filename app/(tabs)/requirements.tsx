@@ -530,7 +530,9 @@ export default function StandardsScreen() {
 
   useEffect(() => {
     if (manageStructureOpen && manageMainTab === 'assign') {
-      loadAssignmentData();
+      void Promise.resolve().then(() => {
+        loadAssignmentData();
+      });
     }
   }, [manageStructureOpen, manageMainTab, activeEvent?.id]);
 
@@ -993,10 +995,12 @@ export default function StandardsScreen() {
 
   useEffect(() => {
     if (!manageStructureOpen || manageMainTab !== 'add') {
-      setCriteriaAreaDropdownOpen(false);
-      setRequirementAreaDropdownOpen(false);
-      setRequirementCriteriaDropdownOpen(false);
-      setParentRequirementDropdownOpen(false);
+      void Promise.resolve().then(() => {
+        setCriteriaAreaDropdownOpen(false);
+        setRequirementAreaDropdownOpen(false);
+        setRequirementCriteriaDropdownOpen(false);
+        setParentRequirementDropdownOpen(false);
+      });
     }
   }, [manageStructureOpen, manageMainTab, manageTab]);
 

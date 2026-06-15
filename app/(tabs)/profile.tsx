@@ -1,10 +1,10 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import * as DocumentPicker from 'expo-document-picker';
+import { useEffect, useMemo, useState } from 'react';
 import {
     ActivityIndicator,
     Alert,
     FlatList,
     Image,
-    Linking,
     Modal,
     Pressable,
     RefreshControl,
@@ -13,9 +13,11 @@ import {
     Text,
     TextInput,
     TouchableOpacity,
-    View,
+    View
 } from 'react-native';
 import { BASE_URL, eventsAPI, officeHeadsAPI, officesAPI, officetypesAPI, requirementsAPI, usersAPI } from '../../components/connect';
+import EvidenceSubmissionModal from '../../components/evidence-submission-modal';
+import UserFileLightbox from '../../components/user-file-lightbox';
 
 type ProfileAvatarProps = {
   uri?: string;
@@ -127,6 +129,14 @@ export default function OfficesScreen() {
   const [savingComment, setSavingComment] = useState(false);
   const [updatingStatusReqId, setUpdatingStatusReqId] = useState<number | null>(null);
   const [openingUserFileReqId, setOpeningUserFileReqId] = useState<number | null>(null);
+  const [uploadingMyReqId, setUploadingMyReqId] = useState<number | null>(null);
+  const [unsubmittingMyReqId, setUnsubmittingMyReqId] = useState<number | null>(null);
+  const [submissionModalVisible, setSubmissionModalVisible] = useState(false);
+  const [submissionModalRequirement, setSubmissionModalRequirement] = useState<any>(null);
+  const [submissionModalUsers, setSubmissionModalUsers] = useState<any[]>([]);
+  const [submissionModalMode, setSubmissionModalMode] = useState<'work' | 'admin'>('work');
+  const [fileLightboxVisible, setFileLightboxVisible] = useState(false);
+  const [fileLightboxData, setFileLightboxData] = useState<{ url: string; fileName: string } | null>(null);
 
   const [assignModalOpen, setAssignModalOpen] = useState(false);
   const [assignModalRequirement, setAssignModalRequirement] = useState<any>(null);
@@ -237,6 +247,15 @@ export default function OfficesScreen() {
   const isAdmin =
     currentUser?.RoleName?.toLowerCase() === 'admin' ||
     Number(currentUser?.RoleID || currentUser?.role_id || 0) === 1;
+  const roleName = String(currentUser?.RoleName || currentUser?.role_name || currentUser?.role || '').toLowerCase();
+  const roleId = Number(currentUser?.RoleID || currentUser?.role_id || 0);
+  const isOfficeDetailsReadOnly = !isAdmin;
+  const isPersonnelHead =
+    roleId === 3 ||
+    roleName.includes('personnel head') ||
+    roleName.includes('personel head') ||
+    roleName.includes('office head');
+  const currentUserId = toId(currentUser?.UserID, currentUser?.user_id, currentUser?.id);
 
   const getStatusKey = (status: string) => {
     const value = String(status || '').toLowerCase().trim();
@@ -359,7 +378,6 @@ export default function OfficesScreen() {
   };
 
   const loadData = async () => {
-    setLoading(true);
     try {
       const [officeRes, eventRes, userRes] = await Promise.all([
         officesAPI.getAll(),
@@ -405,8 +423,10 @@ export default function OfficesScreen() {
   };
 
   useEffect(() => {
-    loadData();
-    loadSupportData();
+    void Promise.resolve().then(() => {
+      loadData();
+      loadSupportData();
+    });
   }, []);
 
   const onRefresh = () => {
@@ -820,6 +840,18 @@ export default function OfficesScreen() {
     return [];
   };
 
+  const getCurrentUserAssignment = (req: any) => {
+    if (!currentUserId) return null;
+    return getRequirementUsers(req).find((user: any) => {
+      const assignedUserId = toId(user?.UserID, user?.user_id, user?.id);
+      return assignedUserId === currentUserId;
+    }) || null;
+  };
+
+  const canCurrentUserSubmitRequirement = (req: any) => {
+    return isPersonnelHead && !!getCurrentUserAssignment(req);
+  };
+
   const hasUploadedFile = (user: any) => {
     if (user?.HasUploaded === true || user?.HasUploaded === 1) return true;
     if (user?.has_uploaded === true || user?.has_uploaded === 1) return true;
@@ -856,7 +888,22 @@ export default function OfficesScreen() {
     setAssignedUsersMap(nextMap);
   };
 
+  const reloadOfficeDetailsRequirements = async () => {
+    const officeId = toId(officeDetailsTarget?.id, officeDetailsTarget?.OfficeID);
+    if (!officeId) return;
+
+    const reqRes = await officesAPI.getOfficeRequirements(String(officeId));
+    const reqList = extractList(reqRes, ['requirements', 'officeRequirements']);
+    const safeReqList = Array.isArray(reqList) ? reqList : [];
+    setOfficeDetailsRequirements(safeReqList);
+    await loadAssignedUsersForRequirements(officeId, safeReqList);
+  };
+
   const handleOfficeRequirementStatusChange = async (req: any, newStatusId: 3 | 4 | 5) => {
+    if (!isAdmin) {
+      return;
+    }
+
     const officeId = toId(officeDetailsTarget?.id, officeDetailsTarget?.OfficeID);
     const reqId = toId(req.RequirementID, req.requirement_id, req.id);
     if (!officeId || !reqId) return;
@@ -888,6 +935,10 @@ export default function OfficesScreen() {
   };
 
   const handleRequirementCommentClick = (req: any) => {
+    if (!isAdmin) {
+      return;
+    }
+
     const reqId = toId(req.RequirementID, req.requirement_id, req.id);
     setEditingCommentId(reqId);
     setCommentInput(String(req.comments || req.Comments || req.comment || ''));
@@ -899,6 +950,10 @@ export default function OfficesScreen() {
   };
 
   const handleRequirementCommentSave = async (req: any) => {
+    if (!isAdmin) {
+      return;
+    }
+
     const officeId = toId(officeDetailsTarget?.id, officeDetailsTarget?.OfficeID);
     const reqId = toId(req.RequirementID, req.requirement_id, req.id);
     if (!officeId || !reqId) return;
@@ -932,6 +987,51 @@ export default function OfficesScreen() {
     }
   };
 
+  const closeSubmissionModal = () => {
+    setSubmissionModalVisible(false);
+    setSubmissionModalRequirement(null);
+    setSubmissionModalUsers([]);
+  };
+
+  const closeFileLightbox = () => {
+    setFileLightboxVisible(false);
+    setFileLightboxData(null);
+  };
+
+  const openSubmissionModal = (req: any) => {
+    const reqId = toId(req.RequirementID, req.requirement_id, req.id);
+    if (!reqId) return;
+
+    if (isAdmin) {
+      setSubmissionModalMode('admin');
+      setSubmissionModalUsers(getRequirementUsers(req));
+    } else if (canCurrentUserSubmitRequirement(req)) {
+      const assignment = getCurrentUserAssignment(req);
+      if (!assignment) return;
+      setSubmissionModalMode('work');
+      setSubmissionModalUsers([
+        {
+          ...assignment,
+          HasUploaded: hasUploadedFile(assignment),
+        },
+      ]);
+    } else {
+      return;
+    }
+
+    setSubmissionModalRequirement(req);
+    setSubmissionModalVisible(true);
+  };
+
+  const canOpenSubmissionForRequirement = (req: any) =>
+    isAdmin || canCurrentUserSubmitRequirement(req);
+
+  const getRequirementUploadCounts = (req: any) => {
+    const users = getRequirementUsers(req);
+    const uploadedCount = users.filter((user: any) => hasUploadedFile(user)).length;
+    return { uploadedCount, totalCount: users.length };
+  };
+
   const handleViewUploadedUserFile = async (user: any, req: any) => {
     const reqId = toId(req.RequirementID, req.requirement_id, req.id);
     const userId = toId(user?.UserID, user?.user_id, user?.id, user?.HeadID);
@@ -959,20 +1059,121 @@ export default function OfficesScreen() {
         return;
       }
 
-      const normalizedFileUrl = normalizeServerUrl(fileUrl);
+      const fileName =
+        response?.file?.fileName ||
+        response?.file?.FileName ||
+        response?.fileName ||
+        String(fileUrl).split('/').pop() ||
+        'Uploaded file';
 
-      const supported = await Linking.canOpenURL(String(normalizedFileUrl));
-      if (!supported) {
-        Alert.alert('Cannot open file', 'The uploaded file link cannot be opened on this device.');
-        return;
-      }
-
-      await Linking.openURL(String(normalizedFileUrl));
+      setFileLightboxData({
+        url: normalizeServerUrl(fileUrl),
+        fileName: String(fileName),
+      });
+      setFileLightboxVisible(true);
     } catch (err: any) {
       Alert.alert('Open file failed', err?.message || 'Unable to open uploaded file.');
     } finally {
       setOpeningUserFileReqId(null);
     }
+  };
+
+  const handleUploadMyRequirementFile = async (req: any) => {
+    const reqId = toId(req.RequirementID, req.requirement_id, req.id);
+    const assignment = getCurrentUserAssignment(req);
+
+    if (!reqId || !currentUserId || !assignment || !isPersonnelHead) {
+      Alert.alert('Read only', 'Only assigned personnel heads can submit files for this requirement.');
+      return;
+    }
+
+    try {
+      const result = await DocumentPicker.getDocumentAsync({
+        type: [
+          'application/pdf',
+          'application/msword',
+          'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+          'application/vnd.ms-excel',
+          'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+          'image/jpeg',
+          'image/png',
+        ],
+        copyToCacheDirectory: true,
+      });
+
+      if (result.canceled || !result.assets?.[0]) return;
+
+      const file = result.assets[0];
+
+      setUploadingMyReqId(reqId);
+      const response = await requirementsAPI.uploadUserFile({
+        fileUri: file.uri,
+        fileName: file.name || `requirement-${reqId}`,
+        mimeType: file.mimeType || 'application/octet-stream',
+        requirementId: String(reqId),
+        userId: String(currentUserId),
+      });
+
+      if (response?.success === false) {
+        throw new Error(response?.message || 'Failed to upload file.');
+      }
+
+      await requirementsAPI.markUserAsUploaded(String(reqId), String(currentUserId)).catch(() => null);
+      await reloadOfficeDetailsRequirements();
+      if (submissionModalVisible && submissionModalRequirement) {
+        const assignment = getCurrentUserAssignment(submissionModalRequirement);
+        if (assignment) {
+          setSubmissionModalUsers([
+            {
+              ...assignment,
+              HasUploaded: true,
+            },
+          ]);
+        }
+      }
+      Alert.alert('Submitted', 'Your file was uploaded successfully.');
+    } catch (err: any) {
+      Alert.alert('Upload failed', err?.message || 'Unable to upload this file.');
+    } finally {
+      setUploadingMyReqId(null);
+    }
+  };
+
+  const handleUnsubmitMyRequirementFile = (req: any) => {
+    const reqId = toId(req.RequirementID, req.requirement_id, req.id);
+    const assignment = getCurrentUserAssignment(req);
+
+    if (!reqId || !currentUserId || !assignment || !isPersonnelHead) return;
+
+    Alert.alert('Remove submission', 'Remove your uploaded file for this requirement?', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Remove',
+        style: 'destructive',
+        onPress: async () => {
+          setUnsubmittingMyReqId(reqId);
+          try {
+            await requirementsAPI.deleteUserFile(String(reqId), String(currentUserId));
+            await reloadOfficeDetailsRequirements();
+            if (submissionModalVisible && submissionModalRequirement) {
+              const assignment = getCurrentUserAssignment(submissionModalRequirement);
+              if (assignment) {
+                setSubmissionModalUsers([
+                  {
+                    ...assignment,
+                    HasUploaded: false,
+                  },
+                ]);
+              }
+            }
+          } catch (err: any) {
+            Alert.alert('Remove failed', err?.message || 'Unable to remove your uploaded file.');
+          } finally {
+            setUnsubmittingMyReqId(null);
+          }
+        },
+      },
+    ]);
   };
 
   const loadAssignModalData = async (req: any) => {
@@ -1009,6 +1210,10 @@ export default function OfficesScreen() {
   };
 
   const openAssignUsersModal = async (req: any) => {
+    if (!isAdmin) {
+      return;
+    }
+
     setAssignModalRequirement(req);
     setAssignModalOpen(true);
     setAssignModalTab('assign');
@@ -1055,6 +1260,10 @@ export default function OfficesScreen() {
   };
 
   const submitAssignUsers = async () => {
+    if (!isAdmin) {
+      return;
+    }
+
     const officeId = toId(officeDetailsTarget?.id, officeDetailsTarget?.OfficeID);
     const reqId = toId(assignModalRequirement?.RequirementID, assignModalRequirement?.requirement_id, assignModalRequirement?.id);
     const userIds = Array.from(assignModalSelectedUserIds);
@@ -1085,6 +1294,10 @@ export default function OfficesScreen() {
   };
 
   const removeAssignedUser = async (assignmentId: number) => {
+    if (!isAdmin) {
+      return;
+    }
+
     setRemovingAssignmentId(assignmentId);
     setAssignModalError('');
     try {
@@ -1098,6 +1311,10 @@ export default function OfficesScreen() {
   };
 
   const toggleAssignedUploadStatus = async (assignment: any) => {
+    if (!isAdmin) {
+      return;
+    }
+
     const assignmentId = toId(assignment?.AssignmentID, assignment?.assignment_id, assignment?.id);
     if (!assignmentId) return;
 
@@ -1236,6 +1453,24 @@ export default function OfficesScreen() {
       badge: styles.statusBad,
       dot: styles.statusDotBad,
     };
+  };
+
+  const officeRequirementStatusStyles: Record<
+    'complied' | 'partially' | 'not_complied',
+    { badge: any; dot: any }
+  > = {
+    complied: {
+      badge: styles.officeRequirementStatusBadgeGood,
+      dot: styles.officeRequirementStatusDotGood,
+    },
+    partially: {
+      badge: styles.officeRequirementStatusBadgeWarn,
+      dot: styles.officeRequirementStatusDotWarn,
+    },
+    not_complied: {
+      badge: styles.officeRequirementStatusBadgeBad,
+      dot: styles.officeRequirementStatusDotBad,
+    },
   };
 
   const assignRemainingSlots = Math.max(0, 4 - assignModalAssignedUsers.length);
@@ -1707,34 +1942,45 @@ export default function OfficesScreen() {
 
               <View style={styles.officeDetailsToolsRight}>
                 <View style={styles.officeDetailsStatusWrap}>
-                  <TouchableOpacity
-                    style={styles.officeDetailsStatusBtn}
-                    onPress={() => setOfficeDetailsStatusDropdownOpen((prev) => !prev)}
-                  >
-                    <Text style={styles.officeDetailsStatusBtnText}>
-                      {requirementStatusOptions.find((option) => option.value === officeDetailsStatusFilter)?.label || 'All'}
-                    </Text>
-                  </TouchableOpacity>
+                  {isAdmin ? (
+                    <>
+                      <TouchableOpacity
+                        style={styles.officeDetailsStatusBtn}
+                        onPress={() => setOfficeDetailsStatusDropdownOpen((prev) => !prev)}
+                      >
+                        <Text style={styles.officeDetailsStatusBtnText}>
+                          {requirementStatusOptions.find((option) => option.value === officeDetailsStatusFilter)?.label || 'All'}
+                        </Text>
+                      </TouchableOpacity>
 
-                  {officeDetailsStatusDropdownOpen && (
-                    <View style={styles.officeDetailsStatusDropdown}>
-                      {requirementStatusOptions.map((option) => {
-                        const active = officeDetailsStatusFilter === option.value;
-                        return (
-                          <TouchableOpacity
-                            key={`req-status-${option.value}`}
-                            style={[styles.officeDetailsStatusItem, active && styles.officeDetailsStatusItemActive]}
-                            onPress={() => {
-                              setOfficeDetailsStatusFilter(option.value);
-                              setOfficeDetailsStatusDropdownOpen(false);
-                            }}
-                          >
-                            <Text style={[styles.officeDetailsStatusItemText, active && styles.officeDetailsStatusItemTextActive]}>
-                              {option.label}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
+                      {officeDetailsStatusDropdownOpen && (
+                        <View style={styles.officeDetailsStatusDropdown}>
+                          {requirementStatusOptions.map((option) => {
+                            const active = officeDetailsStatusFilter === option.value;
+                            return (
+                              <TouchableOpacity
+                                key={`req-status-${option.value}`}
+                                style={[styles.officeDetailsStatusItem, active && styles.officeDetailsStatusItemActive]}
+                                onPress={() => {
+                                  setOfficeDetailsStatusFilter(option.value);
+                                  setOfficeDetailsStatusDropdownOpen(false);
+                                }}
+                              >
+                                <Text style={[styles.officeDetailsStatusItemText, active && styles.officeDetailsStatusItemTextActive]}>
+                                  {option.label}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </View>
+                      )}
+                    </>
+                  ) : (
+                    <View style={styles.officeDetailsReadOnlyStatusPill}>
+                      <View style={[styles.officeDetailsReadOnlyStatusDot, officeDetailsStatusStyle.dot]} />
+                      <Text style={styles.officeDetailsReadOnlyStatusText}>
+                        {requirementStatusOptions.find((option) => option.value === officeDetailsStatusFilter)?.label || 'All'}
+                      </Text>
                     </View>
                   )}
                 </View>
@@ -1745,6 +1991,7 @@ export default function OfficesScreen() {
                   onChangeText={setOfficeDetailsSearch}
                   placeholder="Search requirements"
                   placeholderTextColor="#94a3b8"
+                  editable={!isOfficeDetailsReadOnly}
                 />
               </View>
             </View>
@@ -1784,66 +2031,95 @@ export default function OfficesScreen() {
                               const reqStatusId = getRequirementStatusId(req);
                               const isEditingComment = editingCommentId === reqId;
                               const currentComment = String(req.comments || req.Comments || req.comment || '');
+                              const isAssignedToMe = !!getCurrentUserAssignment(req);
+                              const canOpenSubmission = canOpenSubmissionForRequirement(req);
+                              const { uploadedCount, totalCount } = getRequirementUploadCounts(req);
+                              const RequirementRowWrapper: any = canOpenSubmission ? TouchableOpacity : View;
                               return (
-                                <View key={`detail-req-${reqId}`} style={styles.officeRequirementRow}>
+                                <RequirementRowWrapper
+                                  key={`detail-req-${reqId}`}
+                                  style={[
+                                    styles.officeRequirementRow,
+                                    isAssignedToMe && styles.officeRequirementRowAssigned,
+                                  ]}
+                                  onPress={canOpenSubmission ? () => openSubmissionModal(req) : undefined}
+                                  activeOpacity={canOpenSubmission ? 0.85 : 1}
+                                >
                                   <View style={styles.officeRequirementStatusCol}>
-                                    <TouchableOpacity
-                                      style={[styles.reqStatusOption, reqStatusId === 5 && styles.reqStatusOptionActive]}
-                                      onPress={() => handleOfficeRequirementStatusChange(req, 5)}
-                                      disabled={updatingStatusReqId === reqId}
-                                    >
-                                      <View style={styles.reqStatusOptionRow}>
-                                        <View
-                                          style={[
-                                            styles.reqStatusRadioOuter,
-                                            reqStatusId === 5 && styles.reqStatusRadioOuterComplied,
-                                          ]}
+                                    {isAdmin ? (
+                                      <>
+                                        <TouchableOpacity
+                                          style={[styles.reqStatusOption, reqStatusId === 5 && styles.reqStatusOptionActive]}
+                                          onPress={() => handleOfficeRequirementStatusChange(req, 5)}
+                                          disabled={updatingStatusReqId === reqId}
                                         >
-                                          {reqStatusId === 5 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerComplied]} />}
-                                        </View>
-                                        <Text style={[styles.reqStatusOptionText, styles.reqStatusComplied]}>Complied</Text>
-                                      </View>
-                                    </TouchableOpacity>
+                                          <View style={styles.reqStatusOptionRow}>
+                                            <View
+                                              style={[
+                                                styles.reqStatusRadioOuter,
+                                                reqStatusId === 5 && styles.reqStatusRadioOuterComplied,
+                                              ]}
+                                            >
+                                              {reqStatusId === 5 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerComplied]} />}
+                                            </View>
+                                            <Text style={[styles.reqStatusOptionText, styles.reqStatusComplied]}>Complied</Text>
+                                          </View>
+                                        </TouchableOpacity>
 
-                                    <TouchableOpacity
-                                      style={[styles.reqStatusOption, reqStatusId === 4 && styles.reqStatusOptionActive]}
-                                      onPress={() => handleOfficeRequirementStatusChange(req, 4)}
-                                      disabled={updatingStatusReqId === reqId}
-                                    >
-                                      <View style={styles.reqStatusOptionRow}>
-                                        <View
-                                          style={[
-                                            styles.reqStatusRadioOuter,
-                                            reqStatusId === 4 && styles.reqStatusRadioOuterPartial,
-                                          ]}
+                                        <TouchableOpacity
+                                          style={[styles.reqStatusOption, reqStatusId === 4 && styles.reqStatusOptionActive]}
+                                          onPress={() => handleOfficeRequirementStatusChange(req, 4)}
+                                          disabled={updatingStatusReqId === reqId}
                                         >
-                                          {reqStatusId === 4 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerPartial]} />}
-                                        </View>
-                                        <Text style={[styles.reqStatusOptionText, styles.reqStatusPartial]}>Partially Complied</Text>
-                                      </View>
-                                    </TouchableOpacity>
+                                          <View style={styles.reqStatusOptionRow}>
+                                            <View
+                                              style={[
+                                                styles.reqStatusRadioOuter,
+                                                reqStatusId === 4 && styles.reqStatusRadioOuterPartial,
+                                              ]}
+                                            >
+                                              {reqStatusId === 4 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerPartial]} />}
+                                            </View>
+                                            <Text style={[styles.reqStatusOptionText, styles.reqStatusPartial]}>Partially Complied</Text>
+                                          </View>
+                                        </TouchableOpacity>
 
-                                    <TouchableOpacity
-                                      style={[styles.reqStatusOption, reqStatusId === 3 && styles.reqStatusOptionActive]}
-                                      onPress={() => handleOfficeRequirementStatusChange(req, 3)}
-                                      disabled={updatingStatusReqId === reqId}
-                                    >
-                                      <View style={styles.reqStatusOptionRow}>
-                                        <View
-                                          style={[
-                                            styles.reqStatusRadioOuter,
-                                            reqStatusId === 3 && styles.reqStatusRadioOuterNot,
-                                          ]}
+                                        <TouchableOpacity
+                                          style={[styles.reqStatusOption, reqStatusId === 3 && styles.reqStatusOptionActive]}
+                                          onPress={() => handleOfficeRequirementStatusChange(req, 3)}
+                                          disabled={updatingStatusReqId === reqId}
                                         >
-                                          {reqStatusId === 3 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerNot]} />}
-                                        </View>
-                                        <Text style={[styles.reqStatusOptionText, styles.reqStatusNot]}>Not Complied</Text>
+                                          <View style={styles.reqStatusOptionRow}>
+                                            <View
+                                              style={[
+                                                styles.reqStatusRadioOuter,
+                                                reqStatusId === 3 && styles.reqStatusRadioOuterNot,
+                                              ]}
+                                            >
+                                              {reqStatusId === 3 && <View style={[styles.reqStatusRadioInner, styles.reqStatusRadioInnerNot]} />}
+                                            </View>
+                                            <Text style={[styles.reqStatusOptionText, styles.reqStatusNot]}>Not Complied</Text>
+                                          </View>
+                                        </TouchableOpacity>
+                                      </>
+                                    ) : (
+                                      <View style={[styles.officeRequirementStatusBadge, officeRequirementStatusStyles[getRequirementStatusKey(req)].badge]}>
+                                        <View style={[styles.officeRequirementStatusDot, officeRequirementStatusStyles[getRequirementStatusKey(req)].dot]} />
+                                        <Text style={styles.officeRequirementStatusBadgeText}>{getRequirementStatusLabel(req)}</Text>
                                       </View>
-                                    </TouchableOpacity>
+                                    )}
                                   </View>
 
                                   <View style={{ flex: 1 }}>
-                                    <Text style={styles.officeRequirementCode}>{reqCode}</Text>
+                                    <View style={styles.officeRequirementCodeRow}>
+                                      <Text style={styles.officeRequirementCode}>{reqCode}</Text>
+                                      {isAssignedToMe && (
+                                        <View style={styles.officeRequirementActiveBadge}>
+                                          <View style={styles.officeRequirementActiveDot} />
+                                          <Text style={styles.officeRequirementActiveText}>Active</Text>
+                                        </View>
+                                      )}
+                                    </View>
                                     <Text style={styles.officeRequirementDesc}>{reqDesc}</Text>
 
                                     <View style={styles.officeRequirementUsersRow}>
@@ -1855,25 +2131,51 @@ export default function OfficesScreen() {
                                           const initials = getInitials(displayName);
                                           const uploaded = hasUploadedFile(user);
                                           const profileUrl = getProfilePicUrl(user);
+                                          const avatarKey = `req-${reqId}-user-${toId(user?.UserID, user?.id, user?.HeadID)}-${userIndex}`;
                                           return (
-                                            <TouchableOpacity
-                                              key={`req-${reqId}-user-${toId(user?.UserID, user?.id, user?.HeadID)}-${userIndex}`}
-                                              style={[
-                                                styles.officeReqUserAvatar,
-                                                uploaded
-                                                  ? styles.officeReqUserAvatarUploaded
-                                                  : styles.officeReqUserAvatarPending,
-                                              ]}
-                                              onPress={() => handleViewUploadedUserFile(user, req)}
-                                            >
-                                              <ProfileAvatar
-                                                uri={profileUrl}
-                                                initials={initials || 'U'}
-                                                containerStyle={styles.officeReqUserAvatarInner}
-                                                imageStyle={styles.officeReqUserAvatarImage}
-                                                textStyle={styles.officeReqUserAvatarText}
-                                              />
-                                            </TouchableOpacity>
+                                            isAdmin ? (
+                                              <TouchableOpacity
+                                                key={avatarKey}
+                                                style={[
+                                                  styles.officeReqUserAvatar,
+                                                  uploaded
+                                                    ? styles.officeReqUserAvatarUploaded
+                                                    : styles.officeReqUserAvatarPending,
+                                                ]}
+                                                onPress={(event) => {
+                                                  event.stopPropagation?.();
+                                                  if (uploaded) {
+                                                    void handleViewUploadedUserFile(user, req);
+                                                  }
+                                                }}
+                                              >
+                                                <ProfileAvatar
+                                                  uri={profileUrl}
+                                                  initials={initials || 'U'}
+                                                  containerStyle={styles.officeReqUserAvatarInner}
+                                                  imageStyle={styles.officeReqUserAvatarImage}
+                                                  textStyle={styles.officeReqUserAvatarText}
+                                                />
+                                              </TouchableOpacity>
+                                            ) : (
+                                              <View
+                                                key={avatarKey}
+                                                style={[
+                                                  styles.officeReqUserAvatar,
+                                                  uploaded
+                                                    ? styles.officeReqUserAvatarUploaded
+                                                    : styles.officeReqUserAvatarPending,
+                                                ]}
+                                              >
+                                                <ProfileAvatar
+                                                  uri={profileUrl}
+                                                  initials={initials || 'U'}
+                                                  containerStyle={styles.officeReqUserAvatarInner}
+                                                  imageStyle={styles.officeReqUserAvatarImage}
+                                                  textStyle={styles.officeReqUserAvatarText}
+                                                />
+                                              </View>
+                                            )
                                           );
                                         })
                                       )}
@@ -1883,56 +2185,78 @@ export default function OfficesScreen() {
                                       )}
                                     </View>
 
-                                    {isEditingComment ? (
-                                      <View style={styles.officeRequirementCommentEditWrap}>
-                                        <TextInput
-                                          style={styles.officeRequirementCommentInput}
-                                          value={commentInput}
-                                          onChangeText={setCommentInput}
-                                          placeholder="Add comment..."
-                                          placeholderTextColor="#94a3b8"
-                                          multiline
-                                        />
-                                        <View style={styles.officeRequirementCommentActions}>
-                                          <TouchableOpacity
-                                            style={styles.officeRequirementCommentSaveBtn}
-                                            onPress={() => handleRequirementCommentSave(req)}
-                                            disabled={savingComment}
-                                          >
-                                            <Text style={styles.officeRequirementCommentSaveText}>
-                                              {savingComment ? 'Saving...' : 'Save'}
-                                            </Text>
-                                          </TouchableOpacity>
-                                          <TouchableOpacity
-                                            style={styles.officeRequirementCommentCancelBtn}
-                                            onPress={handleRequirementCommentCancel}
-                                            disabled={savingComment}
-                                          >
-                                            <Text style={styles.officeRequirementCommentCancelText}>Cancel</Text>
-                                          </TouchableOpacity>
+                                    {isAdmin ? (
+                                      isEditingComment ? (
+                                        <View style={styles.officeRequirementCommentEditWrap}>
+                                          <TextInput
+                                            style={styles.officeRequirementCommentInput}
+                                            value={commentInput}
+                                            onChangeText={setCommentInput}
+                                            placeholder="Add comment..."
+                                            placeholderTextColor="#94a3b8"
+                                            multiline
+                                          />
+                                          <View style={styles.officeRequirementCommentActions}>
+                                            <TouchableOpacity
+                                              style={styles.officeRequirementCommentSaveBtn}
+                                              onPress={() => handleRequirementCommentSave(req)}
+                                              disabled={savingComment}
+                                            >
+                                              <Text style={styles.officeRequirementCommentSaveText}>
+                                                {savingComment ? 'Saving...' : 'Save'}
+                                              </Text>
+                                            </TouchableOpacity>
+                                            <TouchableOpacity
+                                              style={styles.officeRequirementCommentCancelBtn}
+                                              onPress={handleRequirementCommentCancel}
+                                              disabled={savingComment}
+                                            >
+                                              <Text style={styles.officeRequirementCommentCancelText}>Cancel</Text>
+                                            </TouchableOpacity>
+                                          </View>
                                         </View>
-                                      </View>
+                                      ) : (
+                                        <TouchableOpacity
+                                          style={styles.officeRequirementCommentPreview}
+                                          onPress={() => handleRequirementCommentClick(req)}
+                                        >
+                                          <Text style={styles.officeRequirementCommentPreviewText}>
+                                            {currentComment || 'Add comment...'}
+                                          </Text>
+                                        </TouchableOpacity>
+                                      )
                                     ) : (
-                                      <TouchableOpacity
-                                        style={styles.officeRequirementCommentPreview}
-                                        onPress={() => handleRequirementCommentClick(req)}
-                                      >
-                                        <Text style={styles.officeRequirementCommentPreviewText}>
-                                          {currentComment || 'Add comment...'}
+                                      <View style={[styles.officeRequirementCommentPreview, styles.officeRequirementCommentPreviewReadOnly]}>
+                                        <Text style={[styles.officeRequirementCommentPreviewText, styles.officeRequirementCommentPreviewTextReadOnly]}>
+                                          {currentComment || 'No comment added'}
                                         </Text>
-                                      </TouchableOpacity>
+                                      </View>
                                     )}
                                   </View>
 
                                   <View style={styles.officeRequirementRightCol}>
-                                    <TouchableOpacity
-                                      style={styles.officeRequirementAssignBtn}
-                                      onPress={() => openAssignUsersModal(req)}
-                                    >
-                                      <Text style={styles.officeRequirementAssignText}>Assign</Text>
-                                    </TouchableOpacity>
+                                    {totalCount > 0 && (
+                                      <Text style={styles.officeRequirementUploadCount}>
+                                        Uploaded {uploadedCount}/{totalCount}
+                                      </Text>
+                                    )}
+                                    {isAdmin ? (
+                                      <TouchableOpacity
+                                        style={styles.officeRequirementAssignBtn}
+                                        onPress={(event) => {
+                                          event.stopPropagation?.();
+                                          openAssignUsersModal(req);
+                                        }}
+                                      >
+                                        <Text style={styles.officeRequirementAssignText}>Assign</Text>
+                                      </TouchableOpacity>
+                                    ) : canOpenSubmission ? (
+                                      <Text style={styles.officeRequirementTapHint}>Tap to upload</Text>
+                                    ) : (
+                                      <Text style={styles.officeRequirementReadOnlyText}>View only</Text>
+                                    )}
                                   </View>
-                                </View>
+                                </RequirementRowWrapper>
                               );
                             })}
                           </View>
@@ -1960,6 +2284,41 @@ export default function OfficesScreen() {
           </Pressable>
         </Pressable>
       </Modal>
+
+      <EvidenceSubmissionModal
+        visible={submissionModalVisible}
+        requirement={submissionModalRequirement}
+        users={submissionModalUsers}
+        mode={submissionModalMode}
+        canUpload={submissionModalMode === 'work' && !!submissionModalRequirement && canCurrentUserSubmitRequirement(submissionModalRequirement)}
+        uploading={uploadingMyReqId === toId(submissionModalRequirement?.RequirementID, submissionModalRequirement?.requirement_id, submissionModalRequirement?.id)}
+        unsubmitting={unsubmittingMyReqId === toId(submissionModalRequirement?.RequirementID, submissionModalRequirement?.requirement_id, submissionModalRequirement?.id)}
+        normalizeUrl={normalizeServerUrl}
+        getProfilePicUrl={getProfilePicUrl}
+        getUserDisplayName={getUserDisplayName}
+        onClose={closeSubmissionModal}
+        onSelectFile={() => {
+          if (submissionModalRequirement) {
+            void handleUploadMyRequirementFile(submissionModalRequirement);
+          }
+        }}
+        onUnsubmit={() => {
+          if (submissionModalRequirement) {
+            handleUnsubmitMyRequirementFile(submissionModalRequirement);
+          }
+        }}
+        onViewFile={(user) => {
+          if (submissionModalRequirement) {
+            void handleViewUploadedUserFile(user, submissionModalRequirement);
+          }
+        }}
+      />
+
+      <UserFileLightbox
+        visible={fileLightboxVisible}
+        file={fileLightboxData}
+        onClose={closeFileLightbox}
+      />
 
       <Modal
         visible={assignModalOpen}
@@ -3349,6 +3708,27 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '600',
   },
+  officeDetailsReadOnlyStatusPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    borderWidth: 1,
+    borderColor: '#dbe2ea',
+    borderRadius: 999,
+    backgroundColor: '#f8fafc',
+    paddingHorizontal: 10,
+    paddingVertical: 7,
+  },
+  officeDetailsReadOnlyStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  officeDetailsReadOnlyStatusText: {
+    color: '#475569',
+    fontSize: 12,
+    fontWeight: '600',
+  },
   officeDetailsStatusDropdown: {
     position: 'absolute',
     right: 0,
@@ -3451,6 +3831,51 @@ const styles = StyleSheet.create({
     color: '#64748b',
     fontSize: 12,
   },
+  officeRequirementRowAssigned: {
+    backgroundColor: '#ecfeff',
+    borderColor: '#a5f3fc',
+  },
+  officeRequirementCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flexWrap: 'wrap',
+  },
+  officeRequirementActiveBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    borderWidth: 1,
+    borderColor: '#a5f3fc',
+    backgroundColor: '#ecfeff',
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  officeRequirementActiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#06b6d4',
+  },
+  officeRequirementActiveText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#0e7490',
+  },
+  officeRequirementUploadCount: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#64748b',
+    marginBottom: 6,
+    textAlign: 'right',
+  },
+  officeRequirementTapHint: {
+    color: '#0891b2',
+    fontSize: 10,
+    fontWeight: '700',
+    textAlign: 'right',
+  },
   officeRequirementRow: {
     flexDirection: 'row',
     gap: 8,
@@ -3463,6 +3888,47 @@ const styles = StyleSheet.create({
     width: 130,
     gap: 2,
     paddingTop: 2,
+  },
+  officeRequirementStatusBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    alignSelf: 'flex-start',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 9,
+    paddingVertical: 5,
+  },
+  officeRequirementStatusBadgeGood: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#bbf7d0',
+  },
+  officeRequirementStatusBadgeWarn: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fde68a',
+  },
+  officeRequirementStatusBadgeBad: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
+  },
+  officeRequirementStatusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+  },
+  officeRequirementStatusDotGood: {
+    backgroundColor: '#0d9488',
+  },
+  officeRequirementStatusDotWarn: {
+    backgroundColor: '#b45309',
+  },
+  officeRequirementStatusDotBad: {
+    backgroundColor: '#e11d48',
+  },
+  officeRequirementStatusBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#334155',
   },
   reqStatusOption: {
     borderRadius: 6,
@@ -3597,9 +4063,15 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     paddingVertical: 8,
   },
+  officeRequirementCommentPreviewReadOnly: {
+    backgroundColor: '#f1f5f9',
+  },
   officeRequirementCommentPreviewText: {
     color: '#94a3b8',
     fontSize: 13,
+  },
+  officeRequirementCommentPreviewTextReadOnly: {
+    color: '#64748b',
   },
   officeRequirementCommentEditWrap: {
     marginTop: 8,
@@ -3661,6 +4133,12 @@ const styles = StyleSheet.create({
     color: '#4f46e5',
     fontSize: 12,
     fontWeight: '700',
+  },
+  officeRequirementReadOnlyText: {
+    color: '#94a3b8',
+    fontSize: 11,
+    fontWeight: '600',
+    textAlign: 'right',
   },
   officeDetailsFooter: {
     paddingHorizontal: 12,
