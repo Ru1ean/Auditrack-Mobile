@@ -6,7 +6,7 @@ import { Platform } from 'react-native';
 
 // Change this only when your API host changes.
 
-const DEFAULT_API_BASE_URL = 'http://192.168.1.4:5000';
+const DEFAULT_API_BASE_URL = 'http://192.168.0.88:5000';
 
 const normalizeBaseUrl = (url: string) => url.trim().replace(/\/+$/, '');
 
