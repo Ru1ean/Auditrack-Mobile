@@ -14,23 +14,21 @@ export default function Navbar() {
 
 const styles = StyleSheet.create({
   safeAreaNavbar: {
-    backgroundColor: '#1e293b',
+    backgroundColor: '#ffffff',
   },
   navbar: {
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#1e293b',
-    paddingVertical: 14,
+    backgroundColor: '#ffffff',
+    paddingVertical: 12,
     paddingHorizontal: 12,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 3,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
   },
   title: {
-    color: '#0891b2',
-    fontSize: 20,
-    fontWeight: '700',
+    color: '#2563eb',
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
 });

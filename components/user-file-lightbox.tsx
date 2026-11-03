@@ -16,6 +16,7 @@ import { getAuthHeaders } from './connect';
 type UserFileLightboxProps = {
   visible: boolean;
   file: { url: string; fileName: string } | null;
+  allowDownload?: boolean;
   onClose: () => void;
 };
 
@@ -27,7 +28,7 @@ const getExtension = (value: string) => {
 
 const isImageExt = (ext: string) => ['jpg', 'jpeg', 'png', 'gif', 'webp', 'avif', 'bmp'].includes(ext);
 
-export default function UserFileLightbox({ visible, file, onClose }: UserFileLightboxProps) {
+export default function UserFileLightbox({ visible, file, allowDownload = true, onClose }: UserFileLightboxProps) {
   const [authHeaders, setAuthHeaders] = useState<Record<string, string>>({});
   const [downloading, setDownloading] = useState(false);
 
@@ -80,16 +81,22 @@ export default function UserFileLightbox({ visible, file, onClose }: UserFileLig
     <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
       <Pressable style={styles.overlay} onPress={onClose}>
         <View style={styles.topBar}>
-          <TouchableOpacity
-            style={styles.downloadBtn}
-            onPress={(e) => {
-              e.stopPropagation?.();
-              void handleDownload();
-            }}
-            disabled={downloading}
-          >
-            <Text style={styles.downloadBtnText}>{downloading ? 'Downloading...' : 'Download'}</Text>
-          </TouchableOpacity>
+          {allowDownload ? (
+            <TouchableOpacity
+              style={styles.downloadBtn}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                void handleDownload();
+              }}
+              disabled={downloading}
+            >
+              <Text style={styles.downloadBtnText}>{downloading ? 'Downloading...' : 'Download'}</Text>
+            </TouchableOpacity>
+          ) : (
+            <View style={styles.inspectBadge}>
+              <Text style={styles.inspectBadgeText}>Inspection Mode</Text>
+            </View>
+          )}
           <TouchableOpacity
             style={styles.closeBtn}
             onPress={(e) => {
@@ -152,6 +159,20 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 13,
     fontWeight: '600',
+  },
+  inspectBadge: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 10,
+    backgroundColor: 'rgba(56, 189, 248, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(56, 189, 248, 0.35)',
+  },
+  inspectBadgeText: {
+    color: '#38bdf8',
+    fontSize: 12,
+    fontWeight: '700',
+    letterSpacing: 0.3,
   },
   closeBtn: {
     width: 36,

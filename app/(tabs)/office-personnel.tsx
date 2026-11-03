@@ -14,7 +14,8 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { BASE_URL, eventsAPI, officeHeadsAPI, officesAPI, usersAPI } from '../../components/connect';
+import { BASE_URL, eventsAPI, getProfilePicUrl, officeHeadsAPI, officesAPI, usersAPI } from '../../components/connect';
+import SmartUserAvatar from '../../components/SmartUserAvatar';
 
 const PERSONNEL_FILTER_OPTIONS = [
   { value: 'all', label: 'All Personnel' },
@@ -41,9 +42,7 @@ const initials = (person: any) => {
 };
 
 const avatarUri = (person: any) => {
-  if (person?.ProfilePic) return `${UPLOADS_BASE_URL}/uploads/profile-pics/${person.ProfilePic}`;
-  if (person?.profile_pic) return `${UPLOADS_BASE_URL}/uploads/profile-pics/${person.profile_pic}`;
-  return '';
+  return getProfilePicUrl(person) || '';
 };
 
 const formatDate = (rawDate: any) => {
@@ -565,13 +564,14 @@ export default function OfficePersonnelScreen() {
         </View>
 
         <View style={styles.avatarWrap}>
-          {avatarUri(item) ? (
-            <Image source={{ uri: avatarUri(item) }} style={styles.avatarImage} />
-          ) : (
-            <View style={styles.avatarFallback}>
-              <Text style={styles.avatarFallbackText}>{initials(item)}</Text>
-            </View>
-          )}
+          <SmartUserAvatar
+            user={item}
+            src={avatarUri(item)}
+            fullName={fullName(item)}
+            size={42}
+            textSize={14}
+            ring="#bae6fd"
+          />
         </View>
 
         <Text style={styles.cardName} numberOfLines={1}>{fullName(item)}</Text>
@@ -699,13 +699,14 @@ export default function OfficePersonnelScreen() {
           <Pressable style={styles.modalCardWide} onPress={() => {}}>
             <View style={styles.detailsTopBar}>
               <View style={styles.detailsHeaderIdentity}>
-                {detailsHead && avatarUri(detailsHead) ? (
-                  <Image source={{ uri: avatarUri(detailsHead) }} style={styles.detailsAvatarImage} />
-                ) : (
-                  <View style={styles.detailsAvatarFallback}>
-                    <Text style={styles.detailsAvatarText}>{detailsHead ? initials(detailsHead) : 'U'}</Text>
-                  </View>
-                )}
+                <SmartUserAvatar
+                  user={detailsHead}
+                  src={detailsHead ? avatarUri(detailsHead) : null}
+                  fullName={detailsHead ? fullName(detailsHead) : ''}
+                  size={46}
+                  textSize={16}
+                  ring="#bae6fd"
+                />
 
                 <View style={{ flex: 1, minWidth: 0 }}>
                   <Text style={styles.detailsName} numberOfLines={1}>{detailsHead ? fullName(detailsHead) : '-'}</Text>

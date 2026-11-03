@@ -13,7 +13,8 @@ import {
     TouchableOpacity,
     View,
 } from 'react-native';
-import { BASE_URL, usersAPI } from '../../components/connect';
+import { BASE_URL, getProfilePicUrl, usersAPI } from '../../components/connect';
+import SmartUserAvatar from '../../components/SmartUserAvatar';
 
 const APPROVAL_FILTER_OPTIONS = [
   { value: 'all', label: 'All Personnel' },
@@ -68,10 +69,7 @@ const getAssignedOffices = (person: any) => {
 
 const getAvatarUri = (person: any) => {
   if (person?.TempPreview) return String(person.TempPreview);
-  if (person?.ProfilePic) return `${UPLOADS_BASE_URL}/uploads/profile-pics/${person.ProfilePic}`;
-  if (person?.profile_pic) return `${UPLOADS_BASE_URL}/uploads/profile-pics/${person.profile_pic}`;
-  if (person?.avatar) return String(person.avatar);
-  return '';
+  return getProfilePicUrl(person) || '';
 };
 
 const getInitials = (person: any) => {
@@ -218,13 +216,14 @@ export default function UsersScreen() {
     return (
       <TouchableOpacity activeOpacity={0.9} style={styles.userCard}>
         <View style={styles.userLeft}>
-          <View style={styles.avatarShell}>
-            {avatarUri ? (
-              <Image source={{ uri: avatarUri }} style={styles.avatarImage} />
-            ) : (
-              <Text style={styles.avatarText}>{getInitials(item)}</Text>
-            )}
-          </View>
+          <SmartUserAvatar
+            user={item}
+            src={avatarUri}
+            fullName={fullName}
+            size={34}
+            textSize={12}
+            ring="#e2e8f0"
+          />
 
           <View style={styles.userInfo}>
             <Text style={styles.userName} numberOfLines={1}>

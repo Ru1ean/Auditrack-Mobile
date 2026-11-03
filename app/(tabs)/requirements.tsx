@@ -1,3600 +1,3092 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Image } from 'expo-image';
+import { MaterialIcons } from '@expo/vector-icons';
+import SmartUserAvatar from '../../components/SmartUserAvatar';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-    ActivityIndicator,
-    Alert,
-    FlatList,
-    Modal,
-    Pressable,
-    RefreshControl,
-    ScrollView,
-    StyleSheet,
-    Text,
-    TextInput,
-    TouchableOpacity,
-    View,
+  ActivityIndicator,
+  Alert,
+  AppState,
+  Modal,
+  Platform,
+  RefreshControl,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
 import {
-    areasAPI,
-    criteriaAPI,
-    eventsAPI,
-    officesAPI,
-    requirementsAPI,
-    usersAPI,
+  BASE_URL,
+  areasAPI,
+  criteriaAPI,
+  eventsAPI,
+  getProfilePicUrl,
+  getStoredUser,
+  normalizeUser,
+  officesAPI,
+  personnelAssignmentsAPI,
+  requirementsAPI,
+  storeUser,
+  usersAPI,
 } from '../../components/connect';
+import EvidenceFilesPanel from '../../components/evidence-files-panel';
+import UserFileLightbox from '../../components/user-file-lightbox';
 
-type EventFormState = {
-  EventName: string;
-  EventCode: string;
-  Description: string;
-  status: string;
+type StatusFilter = 'all' | 'complied' | 'partially' | 'not_complied' | 'my_assigned';
+
+const STATUS_OPTIONS = [
+  { id: 3, label: 'Not Complied', color: '#dc2626', bg: '#fef2f2', border: '#fecaca' },
+  { id: 4, label: 'Partially Complied', color: '#d97706', bg: '#fffbeb', border: '#fde68a' },
+  { id: 5, label: 'Complied', color: '#059669', bg: '#ecfdf5', border: '#a7f3d0' },
+];
+
+const getEntityId = (obj: any, preferredKey?: string) => {
+  if (!obj) return 0;
+  if (preferredKey && obj[preferredKey] !== undefined) return Number(obj[preferredKey]);
+  return Number(
+    obj.requirementid ??
+      obj.RequirementID ??
+      obj.criteriaid ??
+      obj.CriteriaID ??
+      obj.areaid ??
+      obj.AreaID ??
+      obj.eventid ??
+      obj.EventID ??
+      obj.officeid ??
+      obj.OfficeID ??
+      obj.id ??
+      0
+  );
 };
 
-const defaultForm: EventFormState = {
-  EventName: '',
-  EventCode: '',
-  Description: '',
-  status: 'active',
+const formatDateString = (dateStr: any) => {
+  if (!dateStr) return 'N/A';
+  try {
+    const d = new Date(dateStr);
+    if (Number.isNaN(d.getTime())) return 'N/A';
+    return d.toLocaleDateString('en-US', {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric',
+    });
+  } catch {
+    return 'N/A';
+  }
 };
 
-export default function StandardsScreen() {
-  const [events, setEvents] = useState<any[]>([]);
+const getInitials = (name: string) => {
+  if (!name) return 'U';
+  const parts = name.trim().split(/\s+/);
+  if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
+};
+
+export default function RequirementsStandardsScreen() {
+  const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+
+  // Main Accreditation Screen State
+  const [events, setEvents] = useState<any[]>([]);
+  const [mainSearchTerm, setMainSearchTerm] = useState('');
+  const [eventStatusFilter, setEventStatusFilter] = useState<'active' | 'inactive'>('active');
+  const [showStatusFilterMenu, setShowStatusFilterMenu] = useState(false);
+
+  // Auditor & Personnel Assignment Tracking
+  const [auditorAssignedAreaIds, setAuditorAssignedAreaIds] = useState<Set<number>>(new Set());
+  const [auditorAssignedEventIds, setAuditorAssignedEventIds] = useState<Set<number>>(new Set());
+  const [auditorAssignmentsRaw, setAuditorAssignmentsRaw] = useState<any[]>([]);
+
+  const [myAssignedAreaIds, setMyAssignedAreaIds] = useState<Set<number>>(new Set());
+  const [myAssignedCriteriaIds, setMyAssignedCriteriaIds] = useState<Set<number>>(new Set());
+  const [myAssignedReqIds, setMyAssignedReqIds] = useState<Set<number>>(new Set());
+
+  // Structure Workspace Modal State (Opened via "Open Structure >")
+  const [selectedEventForStructure, setSelectedEventForStructure] = useState<any | null>(null);
+  const [structureTab, setStructureTab] = useState<'areas' | 'offices'>('areas');
+  const [structureSearch, setStructureSearch] = useState('');
   const [loadingStructure, setLoadingStructure] = useState(false);
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState<'active' | 'inactive'>('active');
-  const [currentUser, setCurrentUser] = useState<any>(null);
-  const [deleteMode, setDeleteMode] = useState(false);
-  const [selectedEventIds, setSelectedEventIds] = useState<Set<number>>(new Set());
-  const [menuEventId, setMenuEventId] = useState<number | null>(null);
 
-  const [addModalOpen, setAddModalOpen] = useState(false);
-  const [editModalOpen, setEditModalOpen] = useState(false);
-  const [copyModalOpen, setCopyModalOpen] = useState(false);
-  const [structureModalOpen, setStructureModalOpen] = useState(false);
-
-  const [activeEvent, setActiveEvent] = useState<any>(null);
-  const [formState, setFormState] = useState<EventFormState>(defaultForm);
-
+  // Hierarchy Data for the opened event
   const [areas, setAreas] = useState<any[]>([]);
   const [criteria, setCriteria] = useState<any[]>([]);
   const [requirements, setRequirements] = useState<any[]>([]);
-  const [structureSearch, setStructureSearch] = useState('');
-  const [expandedAreas, setExpandedAreas] = useState<Set<number>>(new Set());
-  const [expandedCriteria, setExpandedCriteria] = useState<Set<number>>(new Set());
-  const [expandedNoArea, setExpandedNoArea] = useState(true);
-  const [structureActionMenuOpen, setStructureActionMenuOpen] = useState(false);
-  const [manageStructureOpen, setManageStructureOpen] = useState(false);
-  const [manageMainTab, setManageMainTab] = useState<'add' | 'assign'>('add');
-  const [structureDeleteMode, setStructureDeleteMode] = useState(false);
-  const [selectedAreaIds, setSelectedAreaIds] = useState<Set<number>>(new Set());
-  const [selectedCriteriaIds, setSelectedCriteriaIds] = useState<Set<number>>(new Set());
-  const [selectedRequirementIds, setSelectedRequirementIds] = useState<Set<number>>(new Set());
-  const [manageTab, setManageTab] = useState<'add-area' | 'add-criteria' | 'add-requirement'>('add-area');
-  const [areaForm, setAreaForm] = useState({ AreaCode: '', AreaName: '', Description: '' });
-  const [criteriaForm, setCriteriaForm] = useState({ AreaID: '', CriteriaCode: '', CriteriaName: '', Description: '' });
-  const [requirementForm, setRequirementForm] = useState({
-    AreaFilter: '',
-    CriteriaID: '',
-    ParentRequirementCode: '',
-    RequirementCode: '',
-    Description: '',
-  });
-  const [criteriaAreaDropdownOpen, setCriteriaAreaDropdownOpen] = useState(false);
-  const [requirementAreaDropdownOpen, setRequirementAreaDropdownOpen] = useState(false);
-  const [requirementCriteriaDropdownOpen, setRequirementCriteriaDropdownOpen] = useState(false);
-  const [parentRequirementDropdownOpen, setParentRequirementDropdownOpen] = useState(false);
-  const [parentRequirementOptions, setParentRequirementOptions] = useState<any[]>([]);
-  const [loadingParents, setLoadingParents] = useState(false);
-  const [eventOffices, setEventOffices] = useState<any[]>([]);
-  const [officeSearchTerm, setOfficeSearchTerm] = useState('');
-  const [requirementAssignSearchTerm, setRequirementAssignSearchTerm] = useState('');
-  const [selectedAssignOfficeIds, setSelectedAssignOfficeIds] = useState<Set<number>>(new Set());
-  const [selectedAssignRequirementIds, setSelectedAssignRequirementIds] = useState<Set<number>>(new Set());
-  const [loadingAssignmentData, setLoadingAssignmentData] = useState(false);
-  const [assigningRequirements, setAssigningRequirements] = useState(false);
-  const [editStructureOpen, setEditStructureOpen] = useState(false);
-  const [editStructureType, setEditStructureType] = useState<'area' | 'criteria' | 'requirement'>('area');
-  const [editStructureTarget, setEditStructureTarget] = useState<any>(null);
-  const [editStructureCode, setEditStructureCode] = useState('');
-  const [editStructureName, setEditStructureName] = useState('');
-  const [editStructureDescription, setEditStructureDescription] = useState('');
-  const [savingStructureEdit, setSavingStructureEdit] = useState(false);
+  const [personnelAssignments, setPersonnelAssignments] = useState<any[]>([]);
 
-  const extractList = (response: any, keys: string[] = []) => {
-    if (Array.isArray(response)) return response;
-    if (!response || typeof response !== 'object') return [];
+  // Expanded Nodes in Structure Tree
+  const [expandedAreaIds, setExpandedAreaIds] = useState<Set<number>>(new Set());
+  const [expandedCriteriaIds, setExpandedCriteriaIds] = useState<Set<number>>(new Set());
 
-    for (const key of keys) {
-      if (Array.isArray((response as any)[key])) return (response as any)[key];
+  // Programs and Offices Tab State
+  const [offices, setOffices] = useState<any[]>([]);
+  const [officeSearch, setOfficeSearch] = useState('');
+  const [activeOfficeTab, setActiveOfficeTab] = useState<'All' | 'Programs' | 'Offices'>('All');
+
+  // Evidence Files Panel & Lightbox
+  const [evidencePanelReq, setEvidencePanelReq] = useState<any | null>(null);
+  const [lightboxFile, setLightboxFile] = useState<{ url: string; fileName: string } | null>(null);
+  const [myFileStatsByReq, setMyFileStatsByReq] = useState<Record<number, any>>({});
+  const [submissionFilter, setSubmissionFilter] = useState<'all' | 'rejected' | 'pending' | 'unsubmitted' | 'approved' | 'priority'>('all');
+
+  // Auditor Status Evaluation Modal
+  const [evaluatingReq, setEvaluatingReq] = useState<any | null>(null);
+  const [evalStatusId, setEvalStatusId] = useState<number>(3);
+  const [evalComments, setEvalComments] = useState<string>('');
+  const [evalSaving, setEvalSaving] = useState(false);
+
+  const isAdmin = Boolean(currentUser?.isAdmin || currentUser?.roleid === 1);
+  const isAuditor = Boolean(currentUser?.isAuditor);
+  const isPersonnel = Boolean(currentUser?.isPersonnel || (!isAdmin && !isAuditor));
+  const currentUid = Number(currentUser?.userid ?? currentUser?.id ?? 0);
+
+  // Load Current User
+  const loadUser = useCallback(async () => {
+    try {
+      const res = await usersAPI.getLoggedInUser();
+      const u = res?.user ? normalizeUser(res.user) : null;
+      if (u) {
+        setCurrentUser(u);
+        await storeUser(u);
+        return u;
+      }
+    } catch {
+      const stored = await getStoredUser();
+      if (stored) {
+        setCurrentUser(stored);
+        return stored;
+      }
     }
-
-    if (Array.isArray((response as any).data)) return (response as any).data;
-
-    for (const value of Object.values(response)) {
-      if (Array.isArray(value)) return value;
-    }
-
-    return [];
-  };
-
-  const toId = (...values: any[]) => {
-    for (const value of values) {
-      const parsed = Number(value);
-      if (Number.isFinite(parsed) && parsed > 0) return parsed;
-    }
-    return 0;
-  };
-
-  useEffect(() => {
-    loadInitialData();
+    return null;
   }, []);
 
-  const isAdmin =
-    currentUser?.RoleName?.toLowerCase() === 'admin' ||
-    Number(currentUser?.RoleID || 0) === 1;
-
-  const normalizeEvent = (event: any) => {
-    const id = Number(event.EventID ?? event.id ?? 0);
-    return {
-      ...event,
-      id,
-      name: event.EventName || event.event_name || event.name || 'Untitled',
-      code: event.EventCode || event.event_code || event.code || 'N/A',
-      description: event.Description || event.description || '',
-      status: String(event.status || event.Status || 'active').toLowerCase(),
-    };
-  };
-
-  const loadInitialData = async () => {
-    setLoading(true);
+  // Fetch Main Screen Events and Assignments
+  const loadMainData = useCallback(async () => {
     try {
-      const [eventsRes, userRes] = await Promise.all([
-        eventsAPI.getAllEvents(),
-        usersAPI.getLoggedInUser().catch(() => null),
+      const u = await loadUser();
+      const userId = Number(u?.userid || 0);
+      const userIsAuditor = Boolean(u?.isAuditor);
+
+      // 1. Fetch Events & Offices
+      const [eventsRes, officesRes] = await Promise.all([
+        eventsAPI.getAllEvents().catch(() => []),
+        officesAPI.getAll().catch(() => []),
       ]);
 
-      const eventsListRaw = Array.isArray(eventsRes) ? eventsRes : eventsRes?.data || [];
-      setEvents(eventsListRaw.map(normalizeEvent));
+      const allEvents = Array.isArray(eventsRes?.data)
+        ? eventsRes.data
+        : Array.isArray(eventsRes)
+        ? eventsRes
+        : [];
+      const allOffices = Array.isArray(officesRes?.data)
+        ? officesRes.data
+        : Array.isArray(officesRes)
+        ? officesRes
+        : [];
 
-      if (userRes) {
-        setCurrentUser(userRes?.user || userRes);
+      setOffices(allOffices);
+
+      // 2. Fetch Auditor Assignments if Auditor
+      let assignedEvtIds = new Set<number>();
+      let assignedArIds = new Set<number>();
+      if (userIsAuditor && userId) {
+        try {
+          const assignRes = await areasAPI.getAuditorAssignments(userId);
+          const raw = Array.isArray(assignRes?.assignments)
+            ? assignRes.assignments
+            : Array.isArray(assignRes?.data)
+            ? assignRes.data
+            : [];
+          setAuditorAssignmentsRaw(raw);
+          assignedArIds = new Set(raw.map((a: any) => Number(a.areaid ?? a.AreaID)).filter(Boolean));
+          assignedEvtIds = new Set(raw.map((a: any) => Number(a.eventid ?? a.EventID)).filter(Boolean));
+          setAuditorAssignedAreaIds(assignedArIds);
+          setAuditorAssignedEventIds(assignedEvtIds);
+        } catch (e) {
+          console.warn('Failed to load auditor assignments:', e);
+        }
       }
+
+      // 3. Fetch Personnel Assignments if Personnel
+      if (!userIsAuditor && userId) {
+        try {
+          const [myPaRes, myReqRes] = await Promise.all([
+            personnelAssignmentsAPI.getMyAssignments().catch(() => null),
+            requirementsAPI.getMyAssignments().catch(() => null),
+          ]);
+
+          const paAreaIds = Array.isArray(myPaRes?.assignedAreaIds)
+            ? myPaRes.assignedAreaIds.map(Number)
+            : [];
+          const paCritIds = Array.isArray(myPaRes?.assignedCriteriaIds)
+            ? myPaRes.assignedCriteriaIds.map(Number)
+            : [];
+          const paReqIds = Array.isArray(myPaRes?.assignedRequirementIds)
+            ? myPaRes.assignedRequirementIds.map(Number)
+            : [];
+          const reqIds = Array.isArray(myReqRes?.data)
+            ? myReqRes.data.map((r: any) => Number(r.requirementid || r.RequirementID))
+            : [];
+
+          setMyAssignedAreaIds(new Set(paAreaIds));
+          setMyAssignedCriteriaIds(new Set(paCritIds));
+          setMyAssignedReqIds(new Set([...paReqIds, ...reqIds]));
+          if (myReqRes?.fileStatsByReq) {
+            setMyFileStatsByReq(myReqRes.fileStatsByReq);
+          }
+        } catch (e) {
+          console.warn('Failed to load personnel assignments:', e);
+        }
+      }
+
+      // Filter events if auditor has specific event assignments
+      const visibleEvents =
+        userIsAuditor && assignedEvtIds.size > 0
+          ? allEvents.filter((ev: any) => assignedEvtIds.has(getEntityId(ev, 'eventid')))
+          : allEvents;
+
+      setEvents(visibleEvents);
     } catch (err) {
-      console.log('Standards load error:', err);
-      setEvents([]);
+      console.error('Error loading main data:', err);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
-  };
+  }, [loadUser]);
+
+  useEffect(() => {
+    void loadMainData();
+
+    // Refresh main data on foreground return
+    const sub = AppState.addEventListener('change', (state) => {
+      if (state === 'active' && !selectedEventForStructure) {
+        void loadMainData();
+      }
+    });
+    return () => sub.remove();
+  }, [loadMainData, selectedEventForStructure]);
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadInitialData();
+    void loadMainData();
   };
 
-  const filteredEvents = useMemo(() => {
-    const term = searchTerm.trim().toLowerCase();
-    return events.filter((event) => {
-      if (statusFilter === 'active' && event.status !== 'active') return false;
-      if (statusFilter === 'inactive' && event.status !== 'inactive') return false;
-      if (!term) return true;
+  // Refresh Event Structure data (with silent support)
+  const refreshStructureData = useCallback(
+    async (options?: { silent?: boolean }) => {
+      if (!selectedEventForStructure) return;
+      const isSilent = Boolean(options?.silent);
+      if (!isSilent) {
+        setLoadingStructure(true);
+      }
 
-      return (
-        String(event.name).toLowerCase().includes(term) ||
-        String(event.code).toLowerCase().includes(term) ||
-        String(event.description).toLowerCase().includes(term)
-      );
+      const eventId = String(getEntityId(selectedEventForStructure, 'eventid'));
+      try {
+        const [areasRes, critRes, reqRes, paRes, myReqRes] = await Promise.all([
+          areasAPI.getByEvent(eventId).catch(() => []),
+          criteriaAPI.getByEvent(eventId).catch(() => []),
+          requirementsAPI.getAllRequirements(eventId).catch(() => []),
+          personnelAssignmentsAPI.getByEvent(eventId).catch(() => null),
+          requirementsAPI.getMyAssignments().catch(() => null),
+        ]);
+
+        const areasList = Array.isArray(areasRes?.data)
+          ? areasRes.data
+          : Array.isArray(areasRes)
+          ? areasRes
+          : [];
+        const critList = Array.isArray(critRes?.data)
+          ? critRes.data
+          : Array.isArray(critRes)
+          ? critRes
+          : [];
+        const reqList = Array.isArray(reqRes?.data)
+          ? reqRes.data
+          : Array.isArray(reqRes)
+          ? reqRes
+          : [];
+        const paList = Array.isArray(paRes?.data) ? paRes.data : [];
+
+        setAreas(areasList);
+        setCriteria(critList);
+        setRequirements(reqList);
+        setPersonnelAssignments(paList);
+
+        if (myReqRes?.fileStatsByReq) {
+          setMyFileStatsByReq(myReqRes.fileStatsByReq);
+        }
+      } catch (err) {
+        if (!isSilent) {
+          console.error('Error refreshing event structure:', err);
+        }
+      } finally {
+        if (!isSilent) {
+          setLoadingStructure(false);
+        }
+      }
+    },
+    [selectedEventForStructure]
+  );
+
+  // Live polling while Event Structure is open
+  useEffect(() => {
+    if (!selectedEventForStructure) return;
+
+    // Silent background poll every 3 seconds while viewing structure
+    const pollInterval = setInterval(() => {
+      void refreshStructureData({ silent: true });
+    }, 3000);
+
+    const appStateSub = AppState.addEventListener('change', (state) => {
+      if (state === 'active') {
+        void refreshStructureData({ silent: true });
+      }
     });
-  }, [events, searchTerm, statusFilter]);
 
-  const openStructureModal = async (event: any) => {
-    if (!event?.id) return;
-    setActiveEvent(event);
-    setStructureModalOpen(true);
+    return () => {
+      clearInterval(pollInterval);
+      appStateSub.remove();
+    };
+  }, [selectedEventForStructure, refreshStructureData]);
+
+  // Load Event Structure when an Accreditation Card's "Open Structure >" is tapped
+  const openEventStructure = async (event: any) => {
+    setSelectedEventForStructure(event);
+    setStructureTab('areas');
     setStructureSearch('');
-    setStructureActionMenuOpen(false);
-    setStructureDeleteMode(false);
-    setSelectedAreaIds(new Set());
-    setSelectedCriteriaIds(new Set());
-    setSelectedRequirementIds(new Set());
-    setExpandedAreas(new Set());
-    setExpandedCriteria(new Set());
-    setExpandedNoArea(true);
-    await loadStructureData(event.id);
-  };
-
-  const loadStructureData = async (eventId: number) => {
     setLoadingStructure(true);
+
+    const eventId = String(getEntityId(event, 'eventid'));
     try {
-      // 1) Areas for event (fallback to all areas + filter by event)
-      const areasRes = await areasAPI.getByEvent(String(eventId)).catch(() => ({ data: [] }));
-      let areaList = extractList(areasRes, ['areas']);
-      if (areaList.length === 0) {
-        const allAreasRes = await areasAPI.getAll().catch(() => ({ data: [] }));
-        const allAreas = extractList(allAreasRes, ['areas']);
-        areaList = allAreas.filter((area: any) => {
-          const linkedEventId = toId(
-            area.EventID,
-            area.event_id,
-            area.EventChildID,
-            area.event_child_id,
-            area.ParentEventID,
-            area.parent_event_id
-          );
-          return linkedEventId === eventId;
-        });
-      }
+      const [areasRes, critRes, reqRes, paRes, myReqRes] = await Promise.all([
+        areasAPI.getByEvent(eventId).catch(() => []),
+        criteriaAPI.getByEvent(eventId).catch(() => []),
+        requirementsAPI.getAllRequirements(eventId).catch(() => []),
+        personnelAssignmentsAPI.getByEvent(eventId).catch(() => null),
+        requirementsAPI.getMyAssignments().catch(() => null),
+      ]);
 
-      // 2) Criteria for event (fallback to all criteria + filter by event)
-      const criteriaByEventRes = await criteriaAPI.getByEvent(String(eventId)).catch(() => ({ data: [] }));
-      let eventCriteria = extractList(criteriaByEventRes, ['criteria']);
-      if (eventCriteria.length === 0) {
-        const allCriteriaRes = await criteriaAPI.getAll().catch(() => ({ data: [] }));
-        const allCriteria = extractList(allCriteriaRes, ['criteria']);
-        eventCriteria = allCriteria.filter((criterion: any) => {
-          const linkedEventId = toId(
-            criterion.EventID,
-            criterion.event_id,
-            criterion.EventChildID,
-            criterion.event_child_id,
-            criterion.ParentEventID,
-            criterion.parent_event_id
-          );
-          return linkedEventId === eventId;
-        });
-      }
+      const areasList = Array.isArray(areasRes?.data)
+        ? areasRes.data
+        : Array.isArray(areasRes)
+        ? areasRes
+        : [];
+      const critList = Array.isArray(critRes?.data)
+        ? critRes.data
+        : Array.isArray(critRes)
+        ? critRes
+        : [];
+      const reqList = Array.isArray(reqRes?.data)
+        ? reqRes.data
+        : Array.isArray(reqRes)
+        ? reqRes
+        : [];
+      const paList = Array.isArray(paRes?.data) ? paRes.data : [];
 
-      let uniqueCriteria = Array.from(
-        new Map(eventCriteria.map((c: any) => [toId(c.CriteriaID, c.criteria_id, c.id), c])).values()
-      );
-
-      // 3) Requirements for event (fallback to all requirements + filter)
-      const reqByEventRes = await requirementsAPI
-        .getRequirementsByEvent(String(eventId))
-        .catch(() => ({ data: [] }));
-      let reqList = extractList(reqByEventRes, ['requirements']);
-
-      if (reqList.length === 0) {
-        const allRequirementsRes = await requirementsAPI
-          .getAllRequirements()
-          .catch(() => ({ data: [] }));
-        const allRequirements = extractList(allRequirementsRes, ['requirements']);
-
-        const criteriaIds = new Set(
-          uniqueCriteria
-            .map((criterion: any) => toId(criterion.CriteriaID, criterion.criteria_id, criterion.id))
-            .filter(Boolean)
-        );
-
-        reqList = allRequirements.filter((req: any) => {
-          const reqEventId = toId(req.EventID, req.event_id, req.EventChildID, req.event_child_id);
-          const reqCriteriaId = toId(req.CriteriaID, req.criteria_id);
-          return reqEventId === eventId || criteriaIds.has(reqCriteriaId);
-        });
-      }
-
-      // If criteria endpoint is empty but requirements exist, build criteria from requirements.
-      if (uniqueCriteria.length === 0 && reqList.length > 0) {
-        const derivedPairs = reqList
-          .map((req: any) => {
-            const criteriaId = toId(req.CriteriaID, req.criteria_id);
-            if (!criteriaId) return null;
-
-            return [
-              criteriaId,
-              {
-                CriteriaID: criteriaId,
-                CriteriaCode: req.CriteriaCode || req.criteria_code || `C${criteriaId}`,
-                CriteriaName:
-                  req.CriteriaName ||
-                  req.criteria_name ||
-                  req.RequirementCode ||
-                  req.requirement_code ||
-                  `Criteria ${criteriaId}`,
-                AreaID: req.AreaID ?? req.area_id ?? null,
-                EventID: req.EventID ?? req.event_id ?? eventId,
-              },
-            ] as const;
-          })
-          .filter(Boolean) as Array<readonly [number, any]>;
-
-        uniqueCriteria = Array.from(new Map<number, any>(derivedPairs).values());
-      }
-
-      // 4) If area endpoint still gave no data, infer areas from criteria so hierarchy remains visible.
-      if (areaList.length === 0) {
-        const inferredAreaMap = new Map<number, any>();
-        uniqueCriteria.forEach((criterion: any) => {
-          const areaId = toId(
-            criterion.AreaID,
-            criterion.area_id,
-            criterion.AreaId,
-            criterion.areaId
-          );
-          if (!areaId) return;
-          if (!inferredAreaMap.has(areaId)) {
-            inferredAreaMap.set(areaId, {
-              AreaID: areaId,
-              AreaName:
-                criterion.AreaName ||
-                criterion.area_name ||
-                criterion.AreaCode ||
-                criterion.area_code ||
-                `Area ${areaId}`,
-              inferred: true,
-            });
-          }
-        });
-        areaList = Array.from(inferredAreaMap.values());
-      }
-
-      const initialExpandedAreas = new Set<number>(
-        areaList
-          .map((area: any) => toId(area.AreaID, area.area_id, area.id, area.AreaId))
-          .filter(Boolean)
-      );
-      const initialExpandedCriteria = new Set<number>(
-        uniqueCriteria
-          .map((criterion: any) =>
-            toId(criterion.CriteriaID, criterion.criteria_id, criterion.id, criterion.CriteriaId)
-          )
-          .filter(Boolean)
-      );
-
-      setAreas(areaList);
-      setCriteria(uniqueCriteria);
+      setAreas(areasList);
+      setCriteria(critList);
       setRequirements(reqList);
-      setExpandedAreas(initialExpandedAreas);
-      setExpandedCriteria(initialExpandedCriteria);
-      setExpandedNoArea(true);
+      setPersonnelAssignments(paList);
+
+      if (myReqRes?.fileStatsByReq) {
+        setMyFileStatsByReq(myReqRes.fileStatsByReq);
+      }
+
+      // Default expand the first area or all areas with assignments
+      if (areasList.length > 0) {
+        setExpandedAreaIds(new Set([getEntityId(areasList[0], 'areaid')]));
+      }
     } catch (err) {
-      console.log('Structure load error:', err);
-      setAreas([]);
-      setCriteria([]);
-      setRequirements([]);
+      console.error('Error opening event structure:', err);
+      Alert.alert('Error', 'Unable to load accreditation structure.');
     } finally {
       setLoadingStructure(false);
     }
   };
 
-  const toggleSelectEvent = (eventId: number, selected?: boolean) => {
-    setSelectedEventIds((prev) => {
-      const next = new Set(prev);
-      const shouldSelect = selected ?? !next.has(eventId);
-      if (shouldSelect) next.add(eventId);
-      else next.delete(eventId);
-      return next;
+  // Map Personnel Assignments across Area, Criteria, and Standard levels
+  const { assignedPersonnelMap } = useMemo(() => {
+    const map = {
+      areas: {} as Record<number, any[]>,
+      criteria: {} as Record<number, any[]>,
+      requirements: {} as Record<number, any[]>,
+    };
+
+    personnelAssignments.forEach((pa) => {
+      const userObj = {
+        userid: pa.userid,
+        fullname:
+          pa.fullname ||
+          `${pa.firstname || ''} ${pa.lastname || ''}`.trim() ||
+          pa.Email ||
+          `User #${pa.userid}`,
+        email: pa.Email || pa.email,
+        profile_pic: pa.profile_pic || pa.ProfilePic || pa.profilepic,
+      };
+
+      if (pa.areaid) {
+        const aid = Number(pa.areaid);
+        if (!map.areas[aid]) map.areas[aid] = [];
+        if (!map.areas[aid].some((u) => Number(u.userid) === Number(pa.userid))) {
+          map.areas[aid].push(userObj);
+        }
+      } else if (pa.criteriaid) {
+        const cid = Number(pa.criteriaid);
+        if (!map.criteria[cid]) map.criteria[cid] = [];
+        if (!map.criteria[cid].some((u) => Number(u.userid) === Number(pa.userid))) {
+          map.criteria[cid].push(userObj);
+        }
+      } else if (pa.requirementid) {
+        const rid = Number(pa.requirementid);
+        if (!map.requirements[rid]) map.requirements[rid] = [];
+        if (!map.requirements[rid].some((u) => Number(u.userid) === Number(pa.userid))) {
+          map.requirements[rid].push(userObj);
+        }
+      }
     });
-  };
 
-  const confirmDeleteSelected = () => {
-    if (selectedEventIds.size === 0) {
-      Alert.alert('No selection', 'Select at least one standard to delete.');
-      return;
-    }
+    return { assignedPersonnelMap: map };
+  }, [personnelAssignments]);
 
-    Alert.alert(
-      'Delete standards',
-      `Delete ${selectedEventIds.size} selected standard(s)? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await eventsAPI.deleteEvents(Array.from(selectedEventIds).map(String));
-              setDeleteMode(false);
-              setSelectedEventIds(new Set());
-              await loadInitialData();
-            } catch (err: any) {
-              Alert.alert('Delete failed', err?.message || 'Unable to delete standards.');
-            }
-          },
-        },
-      ]
-    );
-  };
+  // Child Personnel for Area (Sub-items indicator)
+  const getChildPersonnelForArea = useCallback(
+    (areaId: number) => {
+      const directUsers = assignedPersonnelMap.areas[areaId] || [];
+      const directUserIds = new Set(directUsers.map((u) => Number(u.userid)));
+      const childUsersMap = new Map<number, any>();
 
-  const deleteSingleEvent = (event: any) => {
-    Alert.alert(
-      'Delete standard',
-      `Delete "${event.name}"? This cannot be undone.`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete',
-          style: 'destructive',
-          onPress: async () => {
-            try {
-              await eventsAPI.deleteEvents([String(event.id)]);
-              await loadInitialData();
-            } catch (err: any) {
-              Alert.alert('Delete failed', err?.message || 'Unable to delete event.');
-            }
-          },
-        },
-      ]
-    );
-  };
+      const areaCritList = criteria.filter((c) => Number(c.areaid ?? c.AreaID) === areaId);
+      areaCritList.forEach((crit) => {
+        const cId = Number(crit.criteriaid ?? crit.CriteriaID);
+        (assignedPersonnelMap.criteria[cId] || []).forEach((u) => {
+          if (!directUserIds.has(Number(u.userid))) childUsersMap.set(Number(u.userid), u);
+        });
 
-  const startAdd = () => {
-    setFormState(defaultForm);
-    setAddModalOpen(true);
-  };
-
-  const startEdit = (event: any) => {
-    setActiveEvent(event);
-    setFormState({
-      EventName: event.name,
-      EventCode: event.code,
-      Description: event.description,
-      status: event.status || 'active',
-    });
-    setEditModalOpen(true);
-  };
-
-  const startCopy = (event: any) => {
-    setActiveEvent(event);
-    setFormState({
-      EventName: `${event.name} (Copy)`,
-      EventCode: `${event.code}-COPY`,
-      Description: event.description,
-      status: event.status || 'active',
-    });
-    setCopyModalOpen(true);
-  };
-
-  const submitAdd = async () => {
-    if (!formState.EventName.trim() || !formState.EventCode.trim()) {
-      Alert.alert('Missing fields', 'Event name and event code are required.');
-      return;
-    }
-
-    try {
-      await eventsAPI.addEvent(formState);
-      setAddModalOpen(false);
-      await loadInitialData();
-    } catch (err: any) {
-      Alert.alert('Add failed', err?.message || 'Unable to add standard.');
-    }
-  };
-
-  const submitEdit = async () => {
-    if (!activeEvent?.id) return;
-
-    try {
-      await eventsAPI.updateEvent(String(activeEvent.id), formState);
-      setEditModalOpen(false);
-      await loadInitialData();
-    } catch (err: any) {
-      Alert.alert('Update failed', err?.message || 'Unable to update standard.');
-    }
-  };
-
-  const submitCopy = async () => {
-    if (!activeEvent?.id) return;
-
-    try {
-      await eventsAPI.copyEvent({
-        sourceEventId: activeEvent.id,
-        newEventName: formState.EventName,
-        newEventCode: formState.EventCode,
-        newDescription: formState.Description,
-      });
-      setCopyModalOpen(false);
-      await loadInitialData();
-    } catch (err: any) {
-      Alert.alert('Copy failed', err?.message || 'Unable to copy standard.');
-    }
-  };
-
-  const clearStructureSelections = () => {
-    setSelectedAreaIds(new Set());
-    setSelectedCriteriaIds(new Set());
-    setSelectedRequirementIds(new Set());
-  };
-
-  const loadAssignmentData = async () => {
-    if (!activeEvent?.id) return;
-
-    setLoadingAssignmentData(true);
-    try {
-      const officesRes = await officesAPI.getAll().catch(() => ({ data: [] }));
-      const allOffices = extractList(officesRes, ['offices']);
-
-      const byEvent = allOffices.filter((office: any) => {
-        const officeEventId = toId(
-          office.event_id,
-          office.EventID,
-          office.eventId,
-          office.EventChildID,
-          office.event_child_id
+        const cReqs = requirements.filter(
+          (r) => Number(r.criteriaid ?? r.CriteriaID) === cId
         );
-        return officeEventId === activeEvent.id;
+        cReqs.forEach((r) => {
+          const rId = Number(r.requirementid ?? r.RequirementID);
+          (assignedPersonnelMap.requirements[rId] || []).forEach((u) => {
+            if (!directUserIds.has(Number(u.userid))) childUsersMap.set(Number(u.userid), u);
+          });
+        });
       });
 
-      setEventOffices(byEvent.length > 0 ? byEvent : allOffices);
-      setSelectedAssignOfficeIds(new Set());
-      setSelectedAssignRequirementIds(new Set());
-      setOfficeSearchTerm('');
-      setRequirementAssignSearchTerm('');
-    } catch (err: any) {
-      Alert.alert('Failed', err?.message || 'Unable to load offices for assignment.');
-    } finally {
-      setLoadingAssignmentData(false);
-    }
-  };
+      return Array.from(childUsersMap.values());
+    },
+    [assignedPersonnelMap, criteria, requirements]
+  );
 
-  useEffect(() => {
-    if (manageStructureOpen && manageMainTab === 'assign') {
-      void Promise.resolve().then(() => {
-        loadAssignmentData();
+  // Inherited Personnel for Requirement
+  const getInheritedPersonnelForReq = useCallback(
+    (critId: number, areaId: number) => {
+      const inherited: any[] = [];
+      const seen = new Set<number>();
+
+      (assignedPersonnelMap.criteria[critId] || []).forEach((u) => {
+        if (!seen.has(Number(u.userid))) {
+          seen.add(Number(u.userid));
+          inherited.push({ ...u, source: 'Sub-area' });
+        }
       });
-    }
-  }, [manageStructureOpen, manageMainTab, activeEvent?.id]);
 
-  const toggleAssignOffice = (officeId: number, checked: boolean) => {
-    setSelectedAssignOfficeIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(officeId);
-      else next.delete(officeId);
-      return next;
-    });
-  };
-
-  const toggleAssignRequirement = (requirementId: number, checked: boolean) => {
-    setSelectedAssignRequirementIds((prev) => {
-      const next = new Set(prev);
-      if (checked) next.add(requirementId);
-      else next.delete(requirementId);
-      return next;
-    });
-  };
-
-  const toggleAssignRequirementBatch = (requirementIds: number[], checked: boolean) => {
-    setSelectedAssignRequirementIds((prev) => {
-      const next = new Set(prev);
-      requirementIds.forEach((id) => {
-        if (checked) next.add(id);
-        else next.delete(id);
+      (assignedPersonnelMap.areas[areaId] || []).forEach((u) => {
+        if (!seen.has(Number(u.userid))) {
+          seen.add(Number(u.userid));
+          inherited.push({ ...u, source: 'Area' });
+        }
       });
-      return next;
-    });
-  };
 
-  const handleAssignSelected = async () => {
-    if (selectedAssignOfficeIds.size === 0) {
-      Alert.alert('No office selected', 'Select at least one office.');
-      return;
-    }
-    if (selectedAssignRequirementIds.size === 0) {
-      Alert.alert('No requirement selected', 'Select at least one requirement.');
-      return;
-    }
+      return inherited;
+    },
+    [assignedPersonnelMap]
+  );
 
-    setAssigningRequirements(true);
-    try {
-      const officeIds = Array.from(selectedAssignOfficeIds);
-      const requirementIds = Array.from(selectedAssignRequirementIds);
+  // Assignment check helpers
+  const isAreaAssignedToMe = useCallback(
+    (areaId: number) => {
+      if (isAuditor) return auditorAssignedAreaIds.has(areaId);
+      return myAssignedAreaIds.has(areaId);
+    },
+    [isAuditor, auditorAssignedAreaIds, myAssignedAreaIds]
+  );
 
-      await Promise.all(
-        officeIds.map((officeId) =>
-          officesAPI.addOfficeRequirements(String(officeId), requirementIds)
-        )
+  const isCriteriaAssignedToMe = useCallback(
+    (critId: number, areaId: number) => {
+      if (isAuditor) return auditorAssignedAreaIds.has(areaId);
+      return myAssignedCriteriaIds.has(critId) || myAssignedAreaIds.has(areaId);
+    },
+    [isAuditor, auditorAssignedAreaIds, myAssignedCriteriaIds, myAssignedAreaIds]
+  );
+
+  const isRequirementAssignedToMe = useCallback(
+    (reqId: number, critId: number, areaId: number) => {
+      if (isAuditor) return auditorAssignedAreaIds.has(areaId);
+      return (
+        myAssignedReqIds.has(reqId) ||
+        myAssignedCriteriaIds.has(critId) ||
+        myAssignedAreaIds.has(areaId)
       );
+    },
+    [isAuditor, auditorAssignedAreaIds, myAssignedReqIds, myAssignedCriteriaIds, myAssignedAreaIds]
+  );
 
-      Alert.alert(
-        'Success',
-        `Assigned ${requirementIds.length} requirement(s) to ${officeIds.length} office(s).`
+  // Accordion Toggles
+  const toggleAreaExpand = (areaId: number) => {
+    setExpandedAreaIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(areaId)) next.delete(areaId);
+      else next.add(areaId);
+      return next;
+    });
+  };
+
+  const toggleCriteriaExpand = (critId: number) => {
+    setExpandedCriteriaIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(critId)) next.delete(critId);
+      else next.add(critId);
+      return next;
+    });
+  };
+
+  const expandAll = () => {
+    setExpandedAreaIds(new Set(areas.map((a) => getEntityId(a, 'areaid'))));
+    setExpandedCriteriaIds(new Set(criteria.map((c) => getEntityId(c, 'criteriaid'))));
+  };
+
+  const collapseAll = () => {
+    setExpandedAreaIds(new Set());
+    setExpandedCriteriaIds(new Set());
+  };
+
+  // Filter Main Events List
+  const filteredEvents = useMemo(() => {
+    return events.filter((e) => {
+      const status = String(e.status || e.Status || '').toLowerCase().trim();
+      const isActive = status !== 'inactive';
+      if (eventStatusFilter === 'active' && !isActive) return false;
+      if (eventStatusFilter === 'inactive' && isActive) return false;
+
+      if (!mainSearchTerm.trim()) return true;
+      const q = mainSearchTerm.toLowerCase();
+      const name = String(e.eventname || '').toLowerCase();
+      const code = String(e.eventcode || '').toLowerCase();
+      const desc = String(e.Description || e.description || '').toLowerCase();
+      return name.includes(q) || code.includes(q) || desc.includes(q);
+    });
+  }, [events, eventStatusFilter, mainSearchTerm]);
+
+  // Filter Programs and Offices List (Matching Image 2 Left Section)
+  const filteredOffices = useMemo(() => {
+    let list = offices || [];
+    if (activeOfficeTab === 'Programs') {
+      list = list.filter(
+        (o) =>
+          o.entitytypeid === 1 ||
+          String(o.category_name || o.typename || '').toLowerCase().includes('academic') ||
+          String(o.category_name || o.typename || '').toLowerCase().includes('program')
       );
-      setSelectedAssignOfficeIds(new Set());
-      setSelectedAssignRequirementIds(new Set());
-    } catch (err: any) {
-      Alert.alert('Assign failed', err?.message || 'Unable to assign selected requirements.');
-    } finally {
-      setAssigningRequirements(false);
-    }
-  };
-
-  const handleAddAreaToStructure = async () => {
-    if (!activeEvent?.id) return;
-    if (!areaForm.AreaCode.trim() || !areaForm.AreaName.trim()) {
-      Alert.alert('Missing fields', 'Area code and area name are required.');
-      return;
-    }
-
-    try {
-      await areasAPI.addArea({
-        EventID: activeEvent.id,
-        EventChildID: activeEvent.id,
-        AreaCode: areaForm.AreaCode,
-        AreaName: areaForm.AreaName,
-        Description: areaForm.Description || null,
-      });
-      setAreaForm({ AreaCode: '', AreaName: '', Description: '' });
-      await loadStructureData(activeEvent.id);
-      Alert.alert('Success', 'Area added.');
-    } catch (err: any) {
-      Alert.alert('Failed', err?.message || 'Unable to add area.');
-    }
-  };
-
-  const handleAddCriteriaToStructure = async () => {
-    if (!activeEvent?.id) return;
-    if (!criteriaForm.CriteriaCode.trim() || !criteriaForm.CriteriaName.trim()) {
-      Alert.alert('Missing fields', 'Criteria code and name are required.');
-      return;
-    }
-
-    try {
-      await criteriaAPI.addCriteria({
-        EventID: activeEvent.id,
-        AreaID: criteriaForm.AreaID ? Number(criteriaForm.AreaID) : null,
-        CriteriaCode: criteriaForm.CriteriaCode,
-        CriteriaName: criteriaForm.CriteriaName,
-        Description: criteriaForm.Description || null,
-        ParentCriteriaID: null,
-      });
-      setCriteriaForm({ AreaID: '', CriteriaCode: '', CriteriaName: '', Description: '' });
-      setCriteriaAreaDropdownOpen(false);
-      await loadStructureData(activeEvent.id);
-      Alert.alert('Success', 'Criteria added.');
-    } catch (err: any) {
-      Alert.alert('Failed', err?.message || 'Unable to add criteria.');
-    }
-  };
-
-  const handleAddRequirementToStructure = async () => {
-    if (!activeEvent?.id) return;
-    if (!requirementForm.CriteriaID || !requirementForm.Description.trim()) {
-      Alert.alert('Missing fields', 'Criteria and description are required.');
-      return;
-    }
-
-    try {
-      await requirementsAPI.addRequirement({
-        RequirementCode: requirementForm.RequirementCode || null,
-        Description: requirementForm.Description,
-        CriteriaID: Number(requirementForm.CriteriaID),
-        ParentRequirementCode: requirementForm.ParentRequirementCode || null,
-      });
-      setRequirementForm({
-        AreaFilter: '',
-        CriteriaID: '',
-        ParentRequirementCode: '',
-        RequirementCode: '',
-        Description: '',
-      });
-      setParentRequirementOptions([]);
-      setRequirementAreaDropdownOpen(false);
-      setRequirementCriteriaDropdownOpen(false);
-      setParentRequirementDropdownOpen(false);
-      await loadStructureData(activeEvent.id);
-      Alert.alert('Success', 'Requirement added.');
-    } catch (err: any) {
-      Alert.alert('Failed', err?.message || 'Unable to add requirement.');
-    }
-  };
-
-  const openStructureEdit = (type: 'area' | 'criteria' | 'requirement', item: any) => {
-    setEditStructureType(type);
-    setEditStructureTarget(item);
-
-    if (type === 'area') {
-      setEditStructureCode(item.AreaCode || item.area_code || '');
-      setEditStructureName(item.AreaName || item.area_name || '');
-      setEditStructureDescription(item.Description || item.description || '');
-    } else if (type === 'criteria') {
-      setEditStructureCode(item.CriteriaCode || item.criteria_code || '');
-      setEditStructureName(item.CriteriaName || item.criteria_name || '');
-      setEditStructureDescription(item.Description || item.description || '');
-    } else {
-      setEditStructureCode(item.RequirementCode || item.requirement_code || '');
-      setEditStructureName('');
-      setEditStructureDescription(
-        item.Description || item.description || item.RequirementName || item.requirement_name || ''
+    } else if (activeOfficeTab === 'Offices') {
+      list = list.filter(
+        (o) =>
+          o.entitytypeid === 2 ||
+          String(o.category_name || o.typename || '').toLowerCase().includes('non-academic') ||
+          String(o.category_name || o.typename || '').toLowerCase().includes('office')
       );
     }
 
-    setEditStructureOpen(true);
-  };
+    if (!officeSearch.trim()) return list;
+    const q = officeSearch.toLowerCase();
+    return list.filter((o) => {
+      const name = String(o.officename || '').toLowerCase();
+      const dept = String(o.department_name || '').toLowerCase();
+      return name.includes(q) || dept.includes(q);
+    });
+  }, [offices, activeOfficeTab, officeSearch]);
 
-  const handleSaveStructureEdit = async () => {
-    if (!activeEvent?.id || !editStructureTarget) return;
+  // Submission Filter counts & matching
+  const submissionCounts = useMemo(() => {
+    let rejected = 0;
+    let pending = 0;
+    let unsubmitted = 0;
+    let approved = 0;
 
-    try {
-      setSavingStructureEdit(true);
+    requirements.forEach((r) => {
+      const rId = getEntityId(r, 'requirementid');
+      const stat = myFileStatsByReq[rId] || null;
+      const totFiles = Number(stat?.totalfiles || 0);
+      const rejCount = totFiles > 0 ? Number(stat?.rejectedcount || 0) : 0;
+      const pendCount = totFiles > 0 ? Number(stat?.pendingcount || 0) : 0;
+      const appCount = totFiles > 0 ? Number(stat?.approvedcount || 0) : 0;
 
-      if (editStructureType === 'area') {
-        const areaId = toId(
-          editStructureTarget.AreaID,
-          editStructureTarget.area_id,
-          editStructureTarget.id,
-          editStructureTarget.AreaId
-        );
-        if (!areaId) {
-          Alert.alert('Missing area', 'Area ID is required for updating.');
-          return;
-        }
-        if (!editStructureCode.trim() || !editStructureName.trim()) {
-          Alert.alert('Missing fields', 'Area code and area name are required.');
-          return;
-        }
+      if (rejCount > 0) rejected++;
+      if (pendCount > 0) pending++;
+      if (totFiles === 0) unsubmitted++;
+      if (appCount > 0) approved++;
+    });
 
-        await areasAPI.updateArea(String(areaId), {
-          EventID: activeEvent.id,
-          EventChildID: activeEvent.id,
-          AreaCode: editStructureCode.trim(),
-          AreaName: editStructureName.trim(),
-          Description: editStructureDescription.trim() || null,
-        });
-      } else if (editStructureType === 'criteria') {
-        const criteriaId = toId(
-          editStructureTarget.CriteriaID,
-          editStructureTarget.criteria_id,
-          editStructureTarget.id,
-          editStructureTarget.CriteriaId
-        );
-        if (!criteriaId) {
-          Alert.alert('Missing criteria', 'Criteria ID is required for updating.');
-          return;
-        }
-        if (!editStructureCode.trim() || !editStructureName.trim()) {
-          Alert.alert('Missing fields', 'Criteria code and name are required.');
-          return;
-        }
+    return { rejected, pending, unsubmitted, approved, total: requirements.length };
+  }, [requirements, myFileStatsByReq]);
 
-        const targetAreaId = toId(
-          editStructureTarget.AreaID,
-          editStructureTarget.area_id,
-          editStructureTarget.AreaId,
-          editStructureTarget.areaId
-        );
+  const matchesSubmission = useCallback((rId: number) => {
+    if (submissionFilter === 'all' || submissionFilter === 'priority') return true;
+    const stat = myFileStatsByReq[rId] || null;
+    const totFiles = Number(stat?.totalfiles || 0);
+    const rejCount = totFiles > 0 ? Number(stat?.rejectedcount || 0) : 0;
+    const pendCount = totFiles > 0 ? Number(stat?.pendingcount || 0) : 0;
+    const appCount = totFiles > 0 ? Number(stat?.approvedcount || 0) : 0;
 
-        await criteriaAPI.updateCriteria(String(criteriaId), {
-          EventID: activeEvent.id,
-          AreaID: targetAreaId || null,
-          CriteriaCode: editStructureCode.trim(),
-          CriteriaName: editStructureName.trim(),
-          Description: editStructureDescription.trim() || null,
-          ParentCriteriaID: editStructureTarget.ParentCriteriaID ?? null,
-        });
-      } else {
-        const requirementId = toId(
-          editStructureTarget.RequirementID,
-          editStructureTarget.requirement_id,
-          editStructureTarget.id
-        );
-        const criteriaId = toId(
-          editStructureTarget.CriteriaID,
-          editStructureTarget.criteria_id,
-          editStructureTarget.CriteriaId,
-          editStructureTarget.criteriaId
-        );
+    if (submissionFilter === 'rejected') return rejCount > 0;
+    if (submissionFilter === 'pending') return pendCount > 0;
+    if (submissionFilter === 'unsubmitted') return totFiles === 0;
+    if (submissionFilter === 'approved') return appCount > 0;
+    return true;
+  }, [submissionFilter, myFileStatsByReq]);
 
-        if (!requirementId || !criteriaId) {
-          Alert.alert('Missing requirement', 'Requirement and criteria IDs are required for updating.');
-          return;
-        }
-        if (!editStructureDescription.trim()) {
-          Alert.alert('Missing fields', 'Requirement description is required.');
-          return;
-        }
+  const matchesRequirement = useCallback((r: any) => {
+    const rId = getEntityId(r, 'requirementid');
+    if (!matchesSubmission(rId)) return false;
+    const q = structureSearch.trim().toLowerCase();
+    if (!q) return true;
+    const code = String(r.requirementcode || '').toLowerCase();
+    const desc = String(r.Description || r.description || '').toLowerCase();
+    return code.includes(q) || desc.includes(q);
+  }, [matchesSubmission, structureSearch]);
 
-        await requirementsAPI.updateRequirement(String(requirementId), {
-          RequirementCode: editStructureCode.trim() || null,
-          Description: editStructureDescription.trim(),
-          CriteriaID: criteriaId,
-          ParentRequirementCode: editStructureTarget.ParentRequirementCode || null,
-        });
+  // Filter Areas & Standards by Structure Search and Submission Filter
+  const searchLower = structureSearch.trim().toLowerCase();
+  const visibleAreas = useMemo(() => {
+    if (!searchLower && (submissionFilter === 'all' || submissionFilter === 'priority')) return areas;
+    return areas.filter((a) => {
+      const aId = getEntityId(a, 'areaid');
+      const aName = String(a.areaname || '').toLowerCase();
+      const aCode = String(a.areacode || '').toLowerCase();
+
+      const areaReqs = requirements.filter((r) => Number(r.areaid ?? r.AreaID) === aId);
+      const matchedReqs = areaReqs.filter((r) => matchesRequirement(r));
+      if (matchedReqs.length > 0) return true;
+
+      if (searchLower && (aName.includes(searchLower) || aCode.includes(searchLower))) {
+        if (submissionFilter === 'all' || submissionFilter === 'priority') return true;
+        return areaReqs.some((r) => matchesSubmission(getEntityId(r, 'requirementid')));
       }
 
-      setEditStructureOpen(false);
-      await loadStructureData(activeEvent.id);
-      Alert.alert('Updated', 'Structure item updated successfully.');
-    } catch (err: any) {
-      Alert.alert('Update failed', err?.message || 'Unable to update structure item.');
-    } finally {
-      setSavingStructureEdit(false);
-    }
-  };
-
-  const handleDeleteStructureItems = async () => {
-    if (!activeEvent?.id) return;
-
-    const areaIds = Array.from(selectedAreaIds);
-    const criteriaIds = Array.from(selectedCriteriaIds);
-    const requirementIds = Array.from(selectedRequirementIds);
-
-    // include descendants for selected areas/criteria
-    const areaCriteriaIds = criteria
-      .filter((item: any) => areaIds.includes(toId(item.AreaID, item.area_id, item.AreaId, item.areaId)))
-      .map((item: any) => toId(item.CriteriaID, item.criteria_id, item.CriteriaId, item.criteriaId));
-
-    const allCriteriaIds = [...new Set([...criteriaIds, ...areaCriteriaIds].filter(Boolean))];
-
-    const criteriaRequirementIds = requirements
-      .filter((item: any) => allCriteriaIds.includes(toId(item.CriteriaID, item.criteria_id)))
-      .map((item: any) => toId(item.RequirementID, item.requirement_id, item.id));
-
-    const allRequirementIds = [...new Set([...requirementIds, ...criteriaRequirementIds].filter(Boolean))];
-
-    if (areaIds.length === 0 && allCriteriaIds.length === 0 && allRequirementIds.length === 0) {
-      Alert.alert('No selection', 'Select at least one area, criteria, or requirement.');
-      return;
-    }
-
-    Alert.alert('Delete Items', 'Delete selected structure items? This cannot be undone.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Delete',
-        style: 'destructive',
-        onPress: async () => {
-          try {
-            if (allRequirementIds.length > 0) {
-              await requirementsAPI.deleteRequirements(allRequirementIds.map(String));
-            }
-            if (allCriteriaIds.length > 0) {
-              await criteriaAPI.deleteCriteria(allCriteriaIds.map(String));
-            }
-            if (areaIds.length > 0) {
-              await areasAPI.deleteAreas(areaIds.map(String));
-            }
-
-            clearStructureSelections();
-            setStructureDeleteMode(false);
-            await loadStructureData(activeEvent.id);
-          } catch (err: any) {
-            Alert.alert('Delete failed', err?.message || 'Unable to delete selected items.');
-          }
-        },
-      },
-    ]);
-  };
-
-  const requirementsByCriteria = useMemo(() => {
-    return requirements.reduce((map: Record<number, any[]>, item: any) => {
-      const criteriaId = toId(item.CriteriaID, item.criteria_id, item.CriteriaId, item.criteriaId);
-      if (!map[criteriaId]) map[criteriaId] = [];
-      map[criteriaId].push(item);
-      return map;
-    }, {} as Record<number, any[]>);
-  }, [requirements]);
-
-  const eventAreas = useMemo(() => {
-    return areas
-      .map((area: any) => {
-        const id = toId(area.AreaID, area.area_id, area.id, area.AreaId);
-        return {
-          id,
-          code: area.AreaCode || area.area_code || '',
-          name: area.AreaName || area.area_name || `Area ${id}`,
-        };
-      })
-      .filter((area: any) => area.id > 0);
-  }, [areas]);
-
-  const filteredCriteriaOptions = useMemo(() => {
-    if (!requirementForm.AreaFilter) return [];
-    const selectedAreaId = Number(requirementForm.AreaFilter);
-    if (!Number.isFinite(selectedAreaId) || selectedAreaId <= 0) return [];
-
-    return criteria
-      .filter((criterion: any) => {
-        const areaId = toId(criterion.AreaID, criterion.area_id, criterion.AreaId, criterion.areaId);
-        return areaId === selectedAreaId;
-      })
-      .map((criterion: any) => {
-        const criteriaId = toId(
-          criterion.CriteriaID,
-          criterion.criteria_id,
-          criterion.id,
-          criterion.CriteriaId
-        );
-        return {
-          id: criteriaId,
-          code: criterion.CriteriaCode || criterion.criteria_code || `C${criteriaId}`,
-          name: criterion.CriteriaName || criterion.criteria_name || `Criteria ${criteriaId}`,
-        };
-      })
-      .filter((item: any) => item.id > 0);
-  }, [criteria, requirementForm.AreaFilter]);
-
-  const buildNextRequirementCode = (criteriaIdValue: string, parentCode?: string) => {
-    const criteriaId = Number(criteriaIdValue);
-    if (!Number.isFinite(criteriaId) || criteriaId <= 0) return '';
-
-    const selectedCriterion = criteria.find((criterion: any) => {
-      const id = toId(criterion.CriteriaID, criterion.criteria_id, criterion.id, criterion.CriteriaId);
-      return id === criteriaId;
+      return false;
     });
+  }, [areas, requirements, searchLower, submissionFilter, matchesRequirement, matchesSubmission]);
 
-    const baseCode = String(
-      parentCode || selectedCriterion?.CriteriaCode || selectedCriterion?.criteria_code || ''
-    ).trim();
-    if (!baseCode) return '';
-
-    const escapedBase = baseCode.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-    const existing = requirementsByCriteria[criteriaId] || [];
-    const nums = existing
-      .map((req: any) => {
-        const code = String(req.RequirementCode || req.requirement_code || '');
-        const match = code.match(new RegExp(`^${escapedBase}\\.(\\d+)$`));
-        return match ? Number(match[1]) : null;
-      })
-      .filter((num: number | null): num is number => num !== null);
-
-    const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
-    return `${baseCode}.${next}`;
-  };
-
-  const onSelectCriteriaArea = (areaIdValue: string) => {
-    setCriteriaForm((prev) => ({
-      ...prev,
-      AreaID: areaIdValue,
-    }));
-    setCriteriaAreaDropdownOpen(false);
-  };
-
-  const onSelectRequirementArea = (areaIdValue: string) => {
-    setRequirementForm((prev) => ({
-      ...prev,
-      AreaFilter: areaIdValue,
-      CriteriaID: '',
-      ParentRequirementCode: '',
-      RequirementCode: '',
-    }));
-    setParentRequirementOptions([]);
-    setRequirementAreaDropdownOpen(false);
-    setRequirementCriteriaDropdownOpen(false);
-    setParentRequirementDropdownOpen(false);
-  };
-
-  const onSelectRequirementCriteria = async (criteriaIdValue: string) => {
-    setRequirementCriteriaDropdownOpen(false);
-    setParentRequirementDropdownOpen(false);
-
-    if (!criteriaIdValue) {
-      setRequirementForm((prev) => ({
-        ...prev,
-        CriteriaID: '',
-        ParentRequirementCode: '',
-        RequirementCode: '',
-      }));
-      setParentRequirementOptions([]);
-      return;
-    }
-
-    setLoadingParents(true);
+  // Auditor Evaluation Save
+  const handleSaveEvaluation = async () => {
+    if (!evaluatingReq) return;
+    setEvalSaving(true);
+    const reqId = getEntityId(evaluatingReq, 'requirementid');
     try {
-      const criteriaId = Number(criteriaIdValue);
-      const options = requirementsByCriteria[criteriaId] || [];
-      setParentRequirementOptions(options);
-      setRequirementForm((prev) => ({
-        ...prev,
-        CriteriaID: criteriaIdValue,
-        ParentRequirementCode: '',
-        RequirementCode: buildNextRequirementCode(criteriaIdValue),
-      }));
-    } finally {
-      setLoadingParents(false);
-    }
-  };
-
-  const onSelectParentRequirement = (parentCode: string) => {
-    setRequirementForm((prev) => ({
-      ...prev,
-      ParentRequirementCode: parentCode,
-      RequirementCode: buildNextRequirementCode(prev.CriteriaID, parentCode || undefined),
-    }));
-    setParentRequirementDropdownOpen(false);
-  };
-
-  useEffect(() => {
-    if (!manageStructureOpen || manageMainTab !== 'add') {
-      void Promise.resolve().then(() => {
-        setCriteriaAreaDropdownOpen(false);
-        setRequirementAreaDropdownOpen(false);
-        setRequirementCriteriaDropdownOpen(false);
-        setParentRequirementDropdownOpen(false);
-      });
-    }
-  }, [manageStructureOpen, manageMainTab, manageTab]);
-
-  const areasWithContent = useMemo(() => {
-    const term = structureSearch.trim().toLowerCase();
-    const criteriaByArea = criteria.reduce((map: Record<number, any[]>, item: any) => {
-      const areaId = toId(item.AreaID, item.area_id, item.AreaId, item.areaId);
-      if (!map[areaId]) map[areaId] = [];
-      map[areaId].push(item);
-      return map;
-    }, {});
-
-    return areas
-      .map((area) => {
-        const areaId = toId(area.AreaID, area.area_id, area.id, area.AreaId);
-        const allCriteria = criteriaByArea[areaId] || [];
-        const visibleCriteria = allCriteria
-          .map((criterion) => {
-            const criterionId = toId(
-              criterion.CriteriaID,
-              criterion.criteria_id,
-              criterion.id,
-              criterion.CriteriaId
-            );
-            const allRequirements = requirementsByCriteria[criterionId] || [];
-            const visibleRequirements = allRequirements.filter((req) => {
-              if (!term) return true;
-              return (
-                String(req.RequirementCode || req.requirement_code || '').toLowerCase().includes(term) ||
-                String(req.RequirementName || req.requirement_name || req.Description || '').toLowerCase().includes(term)
-              );
-            });
-
-            const criterionMatches =
-              !term ||
-              String(criterion.CriteriaCode || criterion.criteria_code || '').toLowerCase().includes(term) ||
-              String(criterion.CriteriaName || criterion.criteria_name || '').toLowerCase().includes(term);
-
-            if (!criterionMatches && visibleRequirements.length === 0) return null;
-
-            return {
-              ...criterion,
-              requirements: visibleRequirements,
-            };
-          })
-          .filter(Boolean) as any[];
-
-        const areaMatches =
-          !term ||
-          String(area.AreaCode || area.area_code || '').toLowerCase().includes(term) ||
-          String(area.AreaName || area.area_name || '').toLowerCase().includes(term);
-
-        if (!areaMatches && visibleCriteria.length === 0) return null;
-
-        return {
-          ...area,
-          criteria: visibleCriteria,
-        };
-      })
-      .filter(Boolean) as any[];
-  }, [areas, criteria, requirementsByCriteria, structureSearch]);
-
-  const noAreaCriteria = useMemo(() => {
-    return criteria.filter((item: any) => {
-      const areaIdRaw = item.AreaID ?? item.area_id;
-      return (
-        areaIdRaw === null ||
-        areaIdRaw === undefined ||
-        areaIdRaw === '' ||
-        Number(areaIdRaw) === 0
+      await requirementsAPI.evaluateRequirement(
+        String(reqId),
+        evalStatusId,
+        evalComments.trim()
       );
-    });
-  }, [criteria]);
+      setRequirements((prev) =>
+        prev.map((r) =>
+          getEntityId(r, 'requirementid') === reqId
+            ? { ...r, compliancestatusid: evalStatusId, comment: evalComments.trim() }
+            : r
+        )
+      );
+      setEvaluatingReq(null);
+      Alert.alert('Assessment Saved', 'Compliance rating and remarks updated successfully.');
+    } catch (err: any) {
+      Alert.alert('Evaluation Failed', err?.message || 'Could not update status.');
+    } finally {
+      setEvalSaving(false);
+    }
+  };
 
-  const visibleNoAreaCriteria = useMemo(() => {
-    const term = structureSearch.trim().toLowerCase();
-    return noAreaCriteria
-      .map((criterion: any) => {
-        const criterionId = toId(
-          criterion.CriteriaID,
-          criterion.criteria_id,
-          criterion.id,
-          criterion.CriteriaId
-        );
-        const allRequirements = requirementsByCriteria[criterionId] || [];
-        const visibleRequirements = allRequirements.filter((req: any) => {
-          if (!term) return true;
-          return (
-            String(req.RequirementCode || req.requirement_code || '').toLowerCase().includes(term) ||
-            String(
-              req.RequirementName || req.requirement_name || req.Description || req.description || ''
-            )
-              .toLowerCase()
-              .includes(term)
-          );
-        });
-
-        const criterionMatches =
-          !term ||
-          String(criterion.CriteriaCode || criterion.criteria_code || '').toLowerCase().includes(term) ||
-          String(criterion.CriteriaName || criterion.criteria_name || '').toLowerCase().includes(term);
-
-        if (!criterionMatches && visibleRequirements.length === 0) return null;
-
-        return {
-          ...criterion,
-          requirements: visibleRequirements,
-        };
-      })
-      .filter(Boolean) as any[];
-  }, [noAreaCriteria, requirementsByCriteria, structureSearch]);
-
-  const renderEventCard = ({ item }: { item: any }) => {
-    const isChecked = selectedEventIds.has(item.id);
-
-    return (
-      <View style={styles.cardWrap}>
-        <Pressable
-          style={styles.eventCard}
-          onPress={() => {
-            if (deleteMode) {
-              toggleSelectEvent(item.id);
-            } else {
-              openStructureModal(item);
-            }
-          }}
-        >
-          <View style={styles.cardBubble} />
-
-          {deleteMode && (
-            <TouchableOpacity
-              style={[styles.checkbox, isChecked && styles.checkboxActive]}
-              onPress={() => toggleSelectEvent(item.id)}
+  return (
+    <View style={s.container}>
+      {/* ─── Web Header Breadcrumb Bar ─── */}
+      <View style={s.headerBar}>
+        <View style={s.headerBreadcrumbRow}>
+          <Text style={s.headerAppLabel}>AUDITRACK</Text>
+          <Text style={s.headerBreadcrumbSlash}>/</Text>
+          <Text style={s.headerGreeting} numberOfLines={1}>
+            Hello, {currentUser?.firstname || 'User'} {currentUser?.lastname || ''}
+          </Text>
+          <View
+            style={[
+              s.headerRoleBadge,
+              isAuditor ? s.headerRoleBadgeAuditor : s.headerRoleBadgePersonnel,
+            ]}
+          >
+            <Text
+              style={[
+                s.headerRoleBadgeText,
+                isAuditor ? s.headerRoleBadgeTextAuditor : s.headerRoleBadgeTextPersonnel,
+              ]}
             >
-              <Text style={styles.checkboxText}>{isChecked ? '✓' : ''}</Text>
-            </TouchableOpacity>
-          )}
+              {isAuditor ? 'AUDITOR' : 'PERSONNEL'}
+            </Text>
+          </View>
+        </View>
+      </View>
 
-          <View style={[styles.cardHeaderRow, deleteMode && { marginLeft: 26 }]}> 
-            <View style={{ flex: 1 }}>
-              <Text style={styles.cardLabel}>STANDARD EVENT</Text>
-              <Text style={styles.cardTitle} numberOfLines={2}>
-                {item.name}
-              </Text>
-            </View>
+      {/* ─── Main Content Scroll ─── */}
+      <ScrollView
+        style={{ flex: 1 }}
+        contentContainerStyle={s.mainScrollContent}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor="#2563eb" />}
+      >
+        {/* Title Banner (Matching Image 1) */}
+        <View style={s.titleBanner}>
+          <View style={s.titleIconBox}>
+            <MaterialIcons name="verified" size={24} color="#ffffff" />
+          </View>
+          <View style={{ flex: 1, marginLeft: 12 }}>
+            <Text style={s.bannerTitle}>Accreditation & Quality Standards</Text>
+            <Text style={s.bannerSubtitle}>
+              Manage accreditation frameworks, quality audit sub areas, and standard structures.
+            </Text>
+          </View>
+        </View>
 
-            {isAdmin && !deleteMode && (
-              <TouchableOpacity
-                style={styles.dotButton}
-                onPress={() => setMenuEventId((prev) => (prev === item.id ? null : item.id))}
-              >
-                <Text style={styles.dotText}>⋮</Text>
+        {/* Filter Controls Row (Search + Active Standards Dropdown - Image 1 & 4) */}
+        <View style={s.controlsRow}>
+          <View style={s.searchBox}>
+            <MaterialIcons name="search" size={18} color="#64748b" />
+            <TextInput
+              style={s.searchInput}
+              placeholder="Search accreditations or codes..."
+              placeholderTextColor="#94a3b8"
+              value={mainSearchTerm}
+              onChangeText={setMainSearchTerm}
+            />
+            {mainSearchTerm ? (
+              <TouchableOpacity onPress={() => setMainSearchTerm('')}>
+                <MaterialIcons name="close" size={16} color="#64748b" />
               </TouchableOpacity>
-            )}
+            ) : null}
           </View>
 
-          <View style={[styles.cardCodeWrap, deleteMode && { marginLeft: 26 }]}> 
-            <Text style={styles.cardCode}>{item.code}</Text>
-          </View>
+          {/* Status Dropdown Filter */}
+          <TouchableOpacity
+            style={s.statusFilterBtn}
+            onPress={() => setShowStatusFilterMenu((prev) => !prev)}
+            activeOpacity={0.8}
+          >
+            <Text style={s.statusFilterText}>
+              {eventStatusFilter === 'active' ? 'Active Standards' : 'Inactive Standards'}
+            </Text>
+            <MaterialIcons
+              name={showStatusFilterMenu ? 'keyboard-arrow-up' : 'keyboard-arrow-down'}
+              size={18}
+              color="#64748b"
+            />
+          </TouchableOpacity>
+        </View>
 
-          <View style={[styles.cardFooter, deleteMode && { marginLeft: 26 }]}> 
-            <Text style={styles.cardFooterLeft}>Open structure</Text>
-            <Text style={styles.cardFooterRight}>View</Text>
-          </View>
-        </Pressable>
-
-        {menuEventId === item.id && (
-          <View style={styles.optionsMenu}>
+        {/* Status Dropdown Popover Menu (Matching Image 4) */}
+        {showStatusFilterMenu && (
+          <View style={s.statusDropdownMenu}>
             <TouchableOpacity
-              style={styles.optionsItem}
+              style={[
+                s.statusDropdownItem,
+                eventStatusFilter === 'active' && s.statusDropdownItemActive,
+              ]}
               onPress={() => {
-                setMenuEventId(null);
-                startEdit(item);
+                setEventStatusFilter('active');
+                setShowStatusFilterMenu(false);
               }}
             >
-              <Text style={styles.optionsText}>Edit</Text>
+              <Text
+                style={[
+                  s.statusDropdownItemText,
+                  eventStatusFilter === 'active' && s.statusDropdownItemTextActive,
+                ]}
+              >
+                Active Standards
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={styles.optionsItem}
+              style={[
+                s.statusDropdownItem,
+                eventStatusFilter === 'inactive' && s.statusDropdownItemActive,
+              ]}
               onPress={() => {
-                setMenuEventId(null);
-                startCopy(item);
+                setEventStatusFilter('inactive');
+                setShowStatusFilterMenu(false);
               }}
             >
-              <Text style={styles.optionsText}>Copy</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.optionsItem}
-              onPress={() => {
-                setMenuEventId(null);
-                deleteSingleEvent(item);
-              }}
-            >
-              <Text style={styles.optionsDeleteText}>Delete</Text>
+              <Text
+                style={[
+                  s.statusDropdownItemText,
+                  eventStatusFilter === 'inactive' && s.statusDropdownItemTextActive,
+                ]}
+              >
+                Inactive Standards
+              </Text>
             </TouchableOpacity>
           </View>
         )}
-      </View>
-    );
-  };
 
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#0ea5b7" />
-        <Text style={styles.loadingText}>Loading standards...</Text>
-      </View>
-    );
-  }
-
-  return (
-    <View style={styles.container}>
-      <FlatList
-        data={filteredEvents}
-        keyExtractor={(item) => String(item.id)}
-        renderItem={renderEventCard}
-        contentContainerStyle={styles.listContainer}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListHeaderComponent={
-          <View style={styles.headerWrap}>
-            <View style={styles.headerTopRow}>
-              <View style={styles.titleGroup}>
-                <Text style={styles.headerTitle}>Compliance Standards</Text>
-                <Text style={styles.headerSubtitle}>
-                  Manage event structures, criteria, and requirement flows.
-                </Text>
-              </View>
-
-              {isAdmin && (
-                <View style={styles.headerActions}>
-                  <TouchableOpacity
-                    style={[styles.deleteBtn, deleteMode && styles.deleteBtnActive]}
-                    onPress={() => {
-                      if (deleteMode) {
-                        setDeleteMode(false);
-                        setSelectedEventIds(new Set());
-                      } else {
-                        setDeleteMode(true);
-                        setSelectedEventIds(new Set());
-                      }
-                    }}
-                  >
-                    <Text style={styles.deleteBtnText}>{deleteMode ? 'Cancel' : 'Delete'}</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity style={styles.addBtn} onPress={startAdd}>
-                    <Text style={styles.addBtnText}>+ Add</Text>
-                  </TouchableOpacity>
-                </View>
-              )}
-            </View>
-
-            <View style={styles.controlsRow}>
-              <TextInput
-                value={searchTerm}
-                onChangeText={setSearchTerm}
-                placeholder="Search events, codes, or descriptions..."
-                placeholderTextColor="#94a3b8"
-                style={styles.searchInput}
-              />
-
-              <View style={styles.filterWrap}>
-                <TouchableOpacity
-                  style={[styles.filterBtn, statusFilter === 'active' && styles.filterBtnActive]}
-                  onPress={() => setStatusFilter('active')}
-                >
-                  <Text
-                    style={[styles.filterBtnText, statusFilter === 'active' && styles.filterBtnTextActive]}
-                  >
-                    Active
-                  </Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={[styles.filterBtn, statusFilter === 'inactive' && styles.filterBtnActive]}
-                  onPress={() => setStatusFilter('inactive')}
-                >
-                  <Text
-                    style={[
-                      styles.filterBtnText,
-                      statusFilter === 'inactive' && styles.filterBtnTextActive,
-                    ]}
-                  >
-                    Inactive
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {isAdmin && deleteMode && (
-              <View style={styles.bulkDeleteBar}>
-                <Text style={styles.bulkDeleteText}>Selected: {selectedEventIds.size}</Text>
-                <TouchableOpacity
-                  style={[styles.bulkDeleteBtn, selectedEventIds.size === 0 && styles.bulkDeleteBtnDisabled]}
-                  onPress={confirmDeleteSelected}
-                  disabled={selectedEventIds.size === 0}
-                >
-                  <Text style={styles.bulkDeleteBtnText}>Delete Selected</Text>
-                </TouchableOpacity>
-              </View>
-            )}
+        {/* ─── Accreditation Cards Grid (Matching Image 1 & EventCard.jsx) ─── */}
+        {loading ? (
+          <View style={s.loadingBox}>
+            <ActivityIndicator size="large" color="#2563eb" />
+            <Text style={s.loadingText}>Loading accreditation frameworks...</Text>
           </View>
-        }
-        ListEmptyComponent={
-          <View style={styles.centerContainer}>
-            <Text style={styles.emptyText}>No standards found.</Text>
+        ) : filteredEvents.length === 0 ? (
+          <View style={s.emptyCard}>
+            <MaterialIcons name="folder-open" size={48} color="#94a3b8" />
+            <Text style={s.emptyTitle}>No Accreditation Standards Found</Text>
+            <Text style={s.emptySubtitle}>
+              {mainSearchTerm
+                ? 'No frameworks match your search query.'
+                : 'No accreditation standards are currently available.'}
+            </Text>
           </View>
-        }
-      />
+        ) : (
+          filteredEvents.map((evt) => {
+            const evtId = getEntityId(evt, 'eventid');
+            const code = evt.eventcode || 'STANDARD';
+            const name = evt.eventname || 'Accreditation Framework';
+            const level =
+              evt.accreditationlevel && String(evt.accreditationlevel).toUpperCase() !== 'N/A'
+                ? evt.accreditationlevel
+                : 'Level IV';
+            const status = String(evt.status || evt.Status || '').toLowerCase().trim();
+            const isActive = status !== 'inactive';
 
-      <EventFormModal
-        visible={addModalOpen}
-        title="Add Event"
-        formState={formState}
-        setFormState={setFormState}
-        submitText="Add"
-        onClose={() => setAddModalOpen(false)}
-        onSubmit={submitAdd}
-      />
+            const assignedAreasList = (auditorAssignmentsRaw || []).filter(
+              (a: any) => Number(a.eventid) === evtId
+            );
 
-      <EventFormModal
-        visible={editModalOpen}
-        title="Edit Event"
-        formState={formState}
-        setFormState={setFormState}
-        submitText="Save"
-        onClose={() => setEditModalOpen(false)}
-        onSubmit={submitEdit}
-      />
-
-      <EventFormModal
-        visible={copyModalOpen}
-        title="Copy Event"
-        formState={formState}
-        setFormState={setFormState}
-        submitText="Copy"
-        onClose={() => setCopyModalOpen(false)}
-        onSubmit={submitCopy}
-      />
-
-      <Modal visible={structureModalOpen} transparent animationType="fade" onRequestClose={() => setStructureModalOpen(false)}>
-        <View style={styles.modalOverlay}>
-          <View style={styles.structureModalCard}>
-            <View style={styles.structureHeader}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.structureTitle}>{activeEvent?.name || 'Event Structure'}</Text>
-                <Text style={styles.structureCode}>{activeEvent?.code || ''}</Text>
-              </View>
-              <View style={styles.structureHeaderActions}>
-                {isAdmin && (
-                  <TouchableOpacity
-                    onPress={() => setStructureActionMenuOpen((prev) => !prev)}
-                    style={styles.structureDotsBtn}
-                  >
-                    <Text style={styles.structureDotsText}>⋮</Text>
-                  </TouchableOpacity>
-                )}
-                <TouchableOpacity onPress={() => setStructureModalOpen(false)} style={styles.closeModalBtn}>
-                  <Text style={styles.closeModalBtnText}>X</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {isAdmin && structureActionMenuOpen && (
-              <View style={styles.structureActionMenu}>
-                <TouchableOpacity
-                  style={styles.structureActionItem}
-                  onPress={() => {
-                    setStructureActionMenuOpen(false);
-                    setManageStructureOpen(true);
-                  }}
-                >
-                  <Text style={styles.structureActionItemText}>Manage Structure</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.structureActionItem}
-                  onPress={() => {
-                    setStructureActionMenuOpen(false);
-                    setStructureDeleteMode(true);
-                    clearStructureSelections();
-                  }}
-                >
-                  <Text style={styles.structureActionDeleteText}>Delete Items</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {isAdmin && structureDeleteMode && (
-              <View style={styles.structureDeleteBar}>
-                <Text style={styles.structureDeleteText}>
-                  Delete mode: select items then delete.
-                </Text>
-                <View style={styles.structureDeleteActions}>
-                  <TouchableOpacity
-                    onPress={() => {
-                      setStructureDeleteMode(false);
-                      clearStructureSelections();
-                    }}
-                    style={styles.structureDeleteCancelBtn}
-                  >
-                    <Text style={styles.structureDeleteCancelText}>Cancel</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity onPress={handleDeleteStructureItems} style={styles.structureDeleteConfirmBtn}>
-                    <Text style={styles.structureDeleteConfirmText}>Delete</Text>
-                  </TouchableOpacity>
-                </View>
-              </View>
-            )}
-
-            <TextInput
-              value={structureSearch}
-              onChangeText={setStructureSearch}
-              placeholder="Search area, criteria, requirement"
-              placeholderTextColor="#94a3b8"
-              style={styles.structureSearch}
-            />
-
-            {loadingStructure ? (
-              <View style={styles.structureLoadingWrap}>
-                <ActivityIndicator size="small" color="#0ea5b7" />
-                <Text style={styles.loadingText}>Loading structure...</Text>
-              </View>
-            ) : (
-              <ScrollView
-                style={styles.structureScroll}
-                contentContainerStyle={styles.structureScrollContent}
+            return (
+              <TouchableOpacity
+                key={`evt-card-${evtId}`}
+                style={s.eventCard}
+                onPress={() => openEventStructure(evt)}
+                activeOpacity={0.9}
               >
-                {areasWithContent.length === 0 && visibleNoAreaCriteria.length === 0 && (
-                  <View style={styles.structureEmptyWrap}>
-                    <Text style={styles.structureEmptyText}>
-                      No areas, criteria, or requirements found for this event.
+                {/* Header Pills: Code, Level, Active Badge */}
+                <View style={s.eventCardPillsRow}>
+                  <View style={s.eventCodeBadge}>
+                    <MaterialIcons name="fact-check" size={12} color="#1d4ed8" />
+                    <Text style={s.eventCodeBadgeText}>{code}</Text>
+                  </View>
+
+                  {level ? (
+                    <View style={s.eventLevelBadge}>
+                      <Text style={s.eventLevelBadgeText}>{level}</Text>
+                    </View>
+                  ) : null}
+
+                  <View style={isActive ? s.activePill : s.inactivePill}>
+                    <View style={isActive ? s.activeDot : s.inactiveDot} />
+                    <Text style={isActive ? s.activePillText : s.inactivePillText}>
+                      {isActive ? 'Active' : 'Inactive'}
                     </Text>
                   </View>
-                )}
+                </View>
 
-                {areasWithContent.map((area) => {
-                  const areaId = toId(area.AreaID, area.area_id, area.id, area.AreaId);
-                  const areaExpanded = expandedAreas.has(areaId);
+                {/* Event Name */}
+                <Text style={s.eventNameTitle} numberOfLines={2}>
+                  {name}
+                </Text>
 
-                  return (
-                    <View key={String(areaId)} style={styles.structureAreaCard}>
-                      <View style={styles.structureAreaHeader}>
-                        <View style={styles.structureRowInline}>
-                          {structureDeleteMode && (
-                            <TouchableOpacity
-                              style={[
-                                styles.structureCheckbox,
-                                selectedAreaIds.has(areaId) && styles.structureCheckboxActive,
-                              ]}
-                              onPress={() =>
-                                setSelectedAreaIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (next.has(areaId)) next.delete(areaId);
-                                  else next.add(areaId);
-                                  return next;
-                                })
-                              }
-                            >
-                              <Text style={styles.structureCheckboxText}>
-                                {selectedAreaIds.has(areaId) ? '✓' : ''}
-                              </Text>
-                            </TouchableOpacity>
-                          )}
-                          <TouchableOpacity
-                            style={styles.structureExpandTap}
-                            onPress={() => {
-                              setExpandedAreas((prev) => {
-                                const next = new Set(prev);
-                                if (next.has(areaId)) next.delete(areaId);
-                                else next.add(areaId);
-                                return next;
-                              });
-                            }}
-                          >
-                            <Text style={styles.structureAreaTitle}>
-                              {areaExpanded ? '▼' : '▶'}{' '}
-                              {(area.AreaCode || area.area_code)
-                                ? `${area.AreaCode || area.area_code} - ${area.AreaName || area.area_name || 'Unnamed Area'}`
-                                : area.AreaName || area.area_name || 'Unnamed Area'}
-                            </Text>
-                          </TouchableOpacity>
+                {/* Auditor Assigned Areas Tag (if applicable) */}
+                {isAuditor && assignedAreasList.length > 0 ? (
+                  <View style={s.assignedAreasRow}>
+                    <Text style={s.assignedAreasLabel}>Your Assigned Areas:</Text>
+                    <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 4, marginTop: 4 }}>
+                      {assignedAreasList.map((a: any, i: number) => (
+                        <View key={`ar-tag-${i}`} style={s.assignedAreaChip}>
+                          <MaterialIcons name="check" size={10} color="#059669" />
+                          <Text style={s.assignedAreaChipText}>{a.areacode || a.areaname}</Text>
                         </View>
-                        {isAdmin && !structureDeleteMode && (
-                          <TouchableOpacity
-                            style={[styles.structureEditBtn, styles.structureEditBtnLight]}
-                            onPress={() => openStructureEdit('area', area)}
-                          >
-                            <Text style={[styles.structureEditIcon, styles.structureEditIconLight]}>✎</Text>
-                          </TouchableOpacity>
-                        )}
-                      </View>
-
-                      {areaExpanded &&
-                        area.criteria.map((criterion: any) => {
-                          const criteriaId = toId(
-                            criterion.CriteriaID,
-                            criterion.criteria_id,
-                            criterion.id,
-                            criterion.CriteriaId
-                          );
-                          const criteriaExpanded = expandedCriteria.has(criteriaId);
-
-                          return (
-                            <View key={String(criteriaId)} style={styles.criteriaWrap}>
-                              <View style={styles.criteriaHeader}>
-                                <View style={styles.structureRowInline}>
-                                  {structureDeleteMode && (
-                                    <TouchableOpacity
-                                      style={[
-                                        styles.structureCheckbox,
-                                        selectedCriteriaIds.has(criteriaId) && styles.structureCheckboxActive,
-                                      ]}
-                                      onPress={() =>
-                                        setSelectedCriteriaIds((prev) => {
-                                          const next = new Set(prev);
-                                          if (next.has(criteriaId)) next.delete(criteriaId);
-                                          else next.add(criteriaId);
-                                          return next;
-                                        })
-                                      }
-                                    >
-                                      <Text style={styles.structureCheckboxText}>
-                                        {selectedCriteriaIds.has(criteriaId) ? '✓' : ''}
-                                      </Text>
-                                    </TouchableOpacity>
-                                  )}
-                                  <TouchableOpacity
-                                    style={styles.structureExpandTap}
-                                    onPress={() => {
-                                      setExpandedCriteria((prev) => {
-                                        const next = new Set(prev);
-                                        if (next.has(criteriaId)) next.delete(criteriaId);
-                                        else next.add(criteriaId);
-                                        return next;
-                                      });
-                                    }}
-                                  >
-                                    <Text style={styles.criteriaTitle}>
-                                      {criteriaExpanded ? '▼' : '▶'}{' '}
-                                      {(criterion.CriteriaCode || criterion.criteria_code)
-                                        ? `${criterion.CriteriaCode || criterion.criteria_code} - ${criterion.CriteriaName || criterion.criteria_name || 'Unnamed Criteria'}`
-                                        : criterion.CriteriaName || criterion.criteria_name || 'Unnamed Criteria'}
-                                    </Text>
-                                  </TouchableOpacity>
-                                </View>
-                                {isAdmin && !structureDeleteMode && (
-                                  <TouchableOpacity
-                                    style={[styles.structureEditBtn, styles.structureEditBtnLight]}
-                                    onPress={() => openStructureEdit('criteria', criterion)}
-                                  >
-                                    <Text style={[styles.structureEditIcon, styles.structureEditIconLight]}>✎</Text>
-                                  </TouchableOpacity>
-                                )}
-                              </View>
-
-                              {criteriaExpanded && (
-                                <View style={styles.requirementsWrap}>
-                                  {criterion.requirements.length === 0 ? (
-                                    <Text style={styles.noItemsText}>No requirements</Text>
-                                  ) : (
-                                    criterion.requirements.map((req: any) => (
-                                      (() => {
-                                        const reqId = toId(req.RequirementID, req.requirement_id, req.id);
-                                        return (
-                                      <View
-                                        key={String(req.RequirementID || req.requirement_id || req.id || Math.random())}
-                                        style={styles.requirementItem}
-                                      >
-                                        <View style={styles.structureRowInline}>
-                                          {structureDeleteMode && (
-                                            <TouchableOpacity
-                                              style={[
-                                                styles.structureCheckbox,
-                                                selectedRequirementIds.has(reqId) && styles.structureCheckboxActive,
-                                              ]}
-                                              onPress={() =>
-                                                setSelectedRequirementIds((prev) => {
-                                                  const next = new Set(prev);
-                                                  if (next.has(reqId)) next.delete(reqId);
-                                                  else next.add(reqId);
-                                                  return next;
-                                                })
-                                              }
-                                            >
-                                              <Text style={styles.structureCheckboxText}>
-                                                {selectedRequirementIds.has(reqId) ? '✓' : ''}
-                                              </Text>
-                                            </TouchableOpacity>
-                                          )}
-                                          <View style={{ flex: 1 }}>
-                                            <Text style={styles.requirementCode}>
-                                              {req.RequirementCode || req.requirement_code || 'REQ'}
-                                            </Text>
-                                            <Text style={styles.requirementText}>
-                                              {req.RequirementName ||
-                                                req.requirement_name ||
-                                                req.Description ||
-                                                req.description ||
-                                                'Untitled requirement'}
-                                            </Text>
-                                          </View>
-                                          {isAdmin && !structureDeleteMode && (
-                                            <TouchableOpacity
-                                              style={[styles.structureEditBtn, styles.structureEditBtnSoft]}
-                                              onPress={() => openStructureEdit('requirement', req)}
-                                            >
-                                              <Text style={styles.structureEditIcon}>✎</Text>
-                                            </TouchableOpacity>
-                                          )}
-                                        </View>
-                                      </View>
-                                        );
-                                      })()
-                                    ))
-                                  )}
-                                </View>
-                              )}
-                            </View>
-                          );
-                        })}
+                      ))}
                     </View>
-                  );
-                })}
+                  </View>
+                ) : null}
 
-                <View style={styles.structureAreaCard}>
-                  <TouchableOpacity
-                    style={styles.noAreaTitle}
-                    onPress={() => setExpandedNoArea((prev) => !prev)}
-                  >
-                    <Text style={styles.noAreaTitleText}>
-                      {expandedNoArea ? '▼' : '▶'} No Area Assigned ({visibleNoAreaCriteria.length})
+                {/* Created & Updated Meta */}
+                <View style={s.cardDatesRow}>
+                  <View style={s.cardDateItem}>
+                    <MaterialIcons name="event" size={14} color="#94a3b8" />
+                    <View style={{ marginLeft: 5 }}>
+                      <Text style={s.cardDateLabel}>CREATED</Text>
+                      <Text style={s.cardDateValue}>{formatDateString(evt.createdat)}</Text>
+                    </View>
+                  </View>
+                  <View style={s.cardDateItem}>
+                    <MaterialIcons name="schedule" size={14} color="#94a3b8" />
+                    <View style={{ marginLeft: 5 }}>
+                      <Text style={s.cardDateLabel}>UPDATED</Text>
+                      <Text style={s.cardDateValue}>
+                        {formatDateString(evt.updatedat || evt.createdat)}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Bottom Action Footer (Matching Image 1) */}
+                <View style={s.cardActionFooter}>
+                  <Text style={s.evidenceTreeLabel}>Hierarchy & Evidence Tree</Text>
+                  <View style={s.openStructureBtn}>
+                    <Text style={s.openStructureBtnText}>Open Structure</Text>
+                    <MaterialIcons name="chevron-right" size={16} color="#2563eb" />
+                  </View>
+                </View>
+              </TouchableOpacity>
+            );
+          })
+        )}
+      </ScrollView>
+
+      {/* ─── Tier 2: Full Structure Workspace Modal (Matching Image 2 & Image 3) ─── */}
+      <Modal
+        visible={Boolean(selectedEventForStructure)}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={() => setSelectedEventForStructure(null)}
+      >
+        <View style={s.structureContainer}>
+          {/* Structure Modal Header (Matching Image 2 Header) */}
+          <View style={s.structureHeader}>
+            <View style={s.structureHeaderIconBox}>
+              <MaterialIcons name="event-note" size={24} color="#2563eb" />
+            </View>
+            <View style={{ flex: 1, marginLeft: 12 }}>
+              <Text style={s.structureHeaderTitle} numberOfLines={1}>
+                {selectedEventForStructure?.eventcode ||
+                  selectedEventForStructure?.eventname ||
+                  'PACUCOA'}
+              </Text>
+              <Text style={s.structureHeaderSubtitle} numberOfLines={1}>
+                {selectedEventForStructure?.eventname || ''}
+              </Text>
+              <View style={s.structureHeaderTagsRow}>
+                <View style={s.structureMetaBadge}>
+                  <Text style={s.structureMetaBadgeText}>
+                    Created: {formatDateString(selectedEventForStructure?.createdat)}
+                  </Text>
+                </View>
+                <View style={s.structureMetaBadge}>
+                  <Text style={s.structureMetaBadgeText}>
+                    Updated:{' '}
+                    {formatDateString(
+                      selectedEventForStructure?.updatedat || selectedEventForStructure?.createdat
+                    )}
+                  </Text>
+                </View>
+                {selectedEventForStructure?.accreditationlevel ? (
+                  <View style={[s.structureMetaBadge, { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }]}>
+                    <Text style={[s.structureMetaBadgeText, { color: '#059669', fontWeight: '800' }]}>
+                      {selectedEventForStructure.accreditationlevel}
                     </Text>
+                  </View>
+                ) : null}
+              </View>
+            </View>
+
+            {/* Close Button ✕ */}
+            <TouchableOpacity
+              style={s.structureCloseBtn}
+              onPress={() => setSelectedEventForStructure(null)}
+            >
+              <MaterialIcons name="close" size={20} color="#64748b" />
+            </TouchableOpacity>
+          </View>
+
+          {/* Segmented Switcher: Areas vs Programs and Offices */}
+          <View style={s.structureTabsBar}>
+            <TouchableOpacity
+              style={[s.structureTabBtn, structureTab === 'areas' && s.structureTabBtnActive]}
+              onPress={() => setStructureTab('areas')}
+            >
+              <MaterialIcons
+                name="account-tree"
+                size={16}
+                color={structureTab === 'areas' ? '#2563eb' : '#64748b'}
+              />
+              <Text
+                style={[
+                  s.structureTabBtnText,
+                  structureTab === 'areas' && s.structureTabBtnTextActive,
+                ]}
+              >
+                Areas ({areas.length})
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[s.structureTabBtn, structureTab === 'offices' && s.structureTabBtnActive]}
+              onPress={() => setStructureTab('offices')}
+            >
+              <MaterialIcons
+                name="apartment"
+                size={16}
+                color={structureTab === 'offices' ? '#2563eb' : '#64748b'}
+              />
+              <Text
+                style={[
+                  s.structureTabBtnText,
+                  structureTab === 'offices' && s.structureTabBtnTextActive,
+                ]}
+              >
+                Programs & Offices ({offices.length})
+              </Text>
+            </TouchableOpacity>
+          </View>
+
+          {/* ─── Tab Content: AREAS HIERARCHY TREE (Matching Image 2 & 3) ─── */}
+          {structureTab === 'areas' ? (
+            <View style={{ flex: 1 }}>
+              {/* Areas Search & Quick Actions */}
+              <View style={s.treeSearchRow}>
+                <View style={s.treeSearchBox}>
+                  <MaterialIcons name="search" size={18} color="#64748b" />
+                  <TextInput
+                    style={s.treeSearchInput}
+                    placeholder="Search areas, sub areas, or standards..."
+                    placeholderTextColor="#94a3b8"
+                    value={structureSearch}
+                    onChangeText={setStructureSearch}
+                  />
+                  {structureSearch ? (
+                    <TouchableOpacity onPress={() => setStructureSearch('')}>
+                      <MaterialIcons name="close" size={16} color="#64748b" />
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+
+                <View style={s.treeExpandToggleRow}>
+                  <TouchableOpacity style={s.treeQuickBtn} onPress={expandAll}>
+                    <Text style={s.treeQuickBtnText}>Expand All</Text>
                   </TouchableOpacity>
+                  <TouchableOpacity style={s.treeQuickBtn} onPress={collapseAll}>
+                    <Text style={s.treeQuickBtnText}>Collapse</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
 
-                  {expandedNoArea && visibleNoAreaCriteria.length === 0 ? (
-                    <Text style={styles.noItemsText}>No criteria without area</Text>
-                  ) : (
-                    expandedNoArea &&
-                    visibleNoAreaCriteria.map((item: any) => {
-                      const criteriaId = toId(
-                        item.CriteriaID,
-                        item.criteria_id,
-                        item.id,
-                        item.CriteriaId
+              {/* Personnel Submission Status Quick Filter Chips */}
+              {isPersonnel && (
+                <View style={s.submissionFilterWrap}>
+                  <ScrollView
+                    horizontal
+                    showsHorizontalScrollIndicator={false}
+                    contentContainerStyle={s.submissionFilterScroll}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'all' && s.submissionFilterChipActiveAll,
+                      ]}
+                      onPress={() => setSubmissionFilter('all')}
+                      activeOpacity={0.75}
+                    >
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'all' && s.submissionFilterChipTextActiveAll,
+                        ]}
+                      >
+                        All ({submissionCounts.total})
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'rejected' && s.submissionFilterChipActiveRejected,
+                      ]}
+                      onPress={() => setSubmissionFilter('rejected')}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[s.submissionDot, { backgroundColor: '#ef4444' }]} />
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'rejected' && s.submissionFilterChipTextActiveRejected,
+                        ]}
+                      >
+                        Needs Revision {submissionCounts.rejected > 0 ? `(${submissionCounts.rejected})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'pending' && s.submissionFilterChipActivePending,
+                      ]}
+                      onPress={() => setSubmissionFilter('pending')}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[s.submissionDot, { backgroundColor: '#f59e0b' }]} />
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'pending' && s.submissionFilterChipTextActivePending,
+                        ]}
+                      >
+                        Under Review {submissionCounts.pending > 0 ? `(${submissionCounts.pending})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'unsubmitted' && s.submissionFilterChipActiveUnsubmitted,
+                      ]}
+                      onPress={() => setSubmissionFilter('unsubmitted')}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[s.submissionDot, { backgroundColor: '#94a3b8' }]} />
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'unsubmitted' && s.submissionFilterChipTextActiveUnsubmitted,
+                        ]}
+                      >
+                        Unsubmitted {submissionCounts.unsubmitted > 0 ? `(${submissionCounts.unsubmitted})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'approved' && s.submissionFilterChipActiveApproved,
+                      ]}
+                      onPress={() => setSubmissionFilter('approved')}
+                      activeOpacity={0.75}
+                    >
+                      <View style={[s.submissionDot, { backgroundColor: '#10b981' }]} />
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'approved' && s.submissionFilterChipTextActiveApproved,
+                        ]}
+                      >
+                        Approved {submissionCounts.approved > 0 ? `(${submissionCounts.approved})` : ''}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        s.submissionFilterChip,
+                        submissionFilter === 'priority' && s.submissionFilterChipActivePriority,
+                      ]}
+                      onPress={() => setSubmissionFilter('priority')}
+                      activeOpacity={0.75}
+                    >
+                      <MaterialIcons
+                        name="sort"
+                        size={14}
+                        color={submissionFilter === 'priority' ? '#4f46e5' : '#64748b'}
+                      />
+                      <Text
+                        style={[
+                          s.submissionFilterChipText,
+                          submissionFilter === 'priority' && s.submissionFilterChipTextActivePriority,
+                        ]}
+                      >
+                        Attention First
+                      </Text>
+                    </TouchableOpacity>
+                  </ScrollView>
+                </View>
+              )}
+
+              {loadingStructure ? (
+                <View style={s.loadingBox}>
+                  <ActivityIndicator size="large" color="#2563eb" />
+                  <Text style={s.loadingText}>Building accreditation structure...</Text>
+                </View>
+              ) : visibleAreas.length === 0 ? (
+                <View style={s.emptyCard}>
+                  <MaterialIcons name="account-tree" size={42} color="#94a3b8" />
+                  <Text style={s.emptyTitle}>No Areas Found</Text>
+                  <Text style={s.emptySubtitle}>No areas or standards match your search query.</Text>
+                </View>
+              ) : (
+                <ScrollView
+                  style={{ flex: 1 }}
+                  contentContainerStyle={{ padding: 14, paddingBottom: 60 }}
+                >
+                  {visibleAreas.map((area) => {
+                    const aId = getEntityId(area, 'areaid');
+                    const isExpanded = expandedAreaIds.has(aId) || (Boolean(searchLower) || (submissionFilter !== 'all' && submissionFilter !== 'priority'));
+                    const isAssigned = isAreaAssignedToMe(aId);
+                    const directUsers = assignedPersonnelMap.areas[aId] || [];
+                    const childUsers = getChildPersonnelForArea(aId);
+                    const visibleDirectUsers = isAdmin
+                      ? directUsers
+                      : isAuditor
+                      ? []
+                      : directUsers.filter((u: any) => Number(u.userid) === currentUid);
+                    const visibleChildUsers = isAdmin
+                      ? childUsers
+                      : isAuditor
+                      ? []
+                      : childUsers.filter((u: any) => Number(u.userid) === currentUid);
+
+                    const areaCriteriaList = criteria.filter((c) => {
+                      if (Number(c.areaid ?? c.AreaID) !== aId) return false;
+                      if (submissionFilter === 'all' || submissionFilter === 'priority') return true;
+                      const cId = getEntityId(c, 'criteriaid');
+                      return requirements.some(
+                        (r) => Number(r.criteriaid ?? r.CriteriaID) === cId && matchesRequirement(r)
                       );
-                      const criteriaExpanded = expandedCriteria.has(criteriaId);
+                    });
 
-                      return (
-                        <View
-                          key={String(item.CriteriaID || item.criteria_id || item.id || Math.random())}
-                          style={styles.noAreaCriteriaItem}
+                    return (
+                      <View key={`area-block-${aId}`} style={s.areaBlock}>
+                        {/* ── Area Bar (Matching Image 2 & 3: bg-blue-600) ── */}
+                        <TouchableOpacity
+                          style={s.areaHeaderBar}
+                          onPress={() => toggleAreaExpand(aId)}
+                          activeOpacity={0.85}
                         >
-                          <View style={styles.criteriaHeader}>
-                            <View style={styles.structureRowInline}>
-                              {structureDeleteMode && (
-                                <TouchableOpacity
-                                  style={[
-                                    styles.structureCheckbox,
-                                    selectedCriteriaIds.has(criteriaId) && styles.structureCheckboxActive,
-                                  ]}
-                                  onPress={() =>
-                                    setSelectedCriteriaIds((prev) => {
-                                      const next = new Set(prev);
-                                      if (next.has(criteriaId)) next.delete(criteriaId);
-                                      else next.add(criteriaId);
-                                      return next;
-                                    })
-                                  }
-                                >
-                                  <Text style={styles.structureCheckboxText}>
-                                    {selectedCriteriaIds.has(criteriaId) ? '✓' : ''}
-                                  </Text>
-                                </TouchableOpacity>
-                              )}
-                              <TouchableOpacity
-                                style={styles.structureExpandTap}
-                                onPress={() => {
-                                  setExpandedCriteria((prev) => {
-                                    const next = new Set(prev);
-                                    if (next.has(criteriaId)) next.delete(criteriaId);
-                                    else next.add(criteriaId);
-                                    return next;
-                                  });
-                                }}
-                              >
-                                <Text style={styles.noAreaCriteriaText}>
-                                  {criteriaExpanded ? '▼' : '▶'} {item.CriteriaCode || item.criteria_code || 'CR'} -{' '}
-                                  {item.CriteriaName || item.criteria_name || 'Unnamed Criteria'}
-                                </Text>
-                              </TouchableOpacity>
-                            </View>
-                            {isAdmin && !structureDeleteMode && (
-                              <TouchableOpacity
-                                style={[styles.structureEditBtn, styles.structureEditBtnLight]}
-                                onPress={() => openStructureEdit('criteria', item)}
-                              >
-                                <Text style={[styles.structureEditIcon, styles.structureEditIconLight]}>✎</Text>
-                              </TouchableOpacity>
-                            )}
-                          </View>
+                          <MaterialIcons
+                            name={isExpanded ? 'keyboard-arrow-down' : 'chevron-right'}
+                            size={22}
+                            color="#ffffff"
+                          />
+                          <View style={{ flex: 1, marginLeft: 8 }}>
+                            <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                              <Text style={s.areaBarTitle}>
+                                {area.areacode ? `${area.areacode}: ` : ''}
+                                {area.areaname || 'Area'}
+                              </Text>
 
-                          {criteriaExpanded && (
-                            <View style={styles.requirementsWrap}>
-                              {item.requirements.length === 0 ? (
-                                <Text style={styles.noItemsText}>No requirements</Text>
+                              {/* ✓ Assigned to you Badge (Matching Image 2) */}
+                              {isAssigned && (
+                                <View style={s.assignedToYouPill}>
+                                  <MaterialIcons name="check" size={10} color="#ffffff" />
+                                  <Text style={s.assignedToYouPillText}>Assigned to you</Text>
+                                </View>
+                              )}
+
+                              {/* Direct Personnel Avatars (Admin sees all; Personnel only sees self; Auditor sees none) */}
+                              {visibleDirectUsers.map((u, ui) => {
+                                const avUrl = getProfilePicUrl(u.profile_pic);
+                                return (
+                                  <View key={`dir-u-${ui}`} style={s.personnelAvatarPill}>
+                                    <SmartUserAvatar user={u} src={avUrl} fullName={u.fullname} size={14} textSize={7} />
+                                    <Text style={s.personnelAvatarPillText} numberOfLines={1}>
+                                      {u.fullname}
+                                    </Text>
+                                  </View>
+                                );
+                              })}
+
+                              {/* Sub-areas Personnel Avatars */}
+                              {visibleChildUsers.map((u, ci) => {
+                                const avUrl = getProfilePicUrl(u.profile_pic);
+                                return (
+                                  <View key={`ch-u-${ci}`} style={s.childPersonnelPill}>
+                                    <SmartUserAvatar user={u} src={avUrl} fullName={u.fullname} size={14} textSize={7} />
+                                    <Text style={s.childPersonnelPillText} numberOfLines={1}>
+                                      {u.fullname} <Text style={{ opacity: 0.8 }}>(Sub-areas)</Text>
+                                    </Text>
+                                  </View>
+                                );
+                              })}
+                            </View>
+
+                            <View style={s.areaDatesRow}>
+                              <Text style={s.areaDatesText}>
+                                Created: {formatDateString(area.createdat)} • Updated:{' '}
+                                {formatDateString(area.updatedat || area.createdat)}
+                              </Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+
+                        {/* ── Expanded Area Children with Connecting Hierarchy Tree Line (Image 3) ── */}
+                        {isExpanded && (
+                          <View style={s.areaChildrenWrap}>
+                            {/* Vertical Hierarchy Guide Line */}
+                            <View style={s.treeVerticalLine} />
+
+                            <View style={s.areaChildrenInner}>
+                              {areaCriteriaList.length === 0 ? (
+                                <View style={s.noSubItemsCard}>
+                                  <Text style={s.noSubItemsText}>No sub areas in this area</Text>
+                                </View>
                               ) : (
-                                item.requirements.map((req: any) => (
-                                  (() => {
-                                    const reqId = toId(req.RequirementID, req.requirement_id, req.id);
-                                    return (
-                                  <View
-                                    key={String(req.RequirementID || req.requirement_id || req.id || Math.random())}
-                                    style={styles.requirementItem}
-                                  >
-                                    <View style={styles.structureRowInline}>
-                                      {structureDeleteMode && (
-                                        <TouchableOpacity
-                                          style={[
-                                            styles.structureCheckbox,
-                                            selectedRequirementIds.has(reqId) && styles.structureCheckboxActive,
-                                          ]}
-                                          onPress={() =>
-                                            setSelectedRequirementIds((prev) => {
-                                              const next = new Set(prev);
-                                              if (next.has(reqId)) next.delete(reqId);
-                                              else next.add(reqId);
-                                              return next;
-                                            })
-                                          }
-                                        >
-                                          <Text style={styles.structureCheckboxText}>
-                                            {selectedRequirementIds.has(reqId) ? '✓' : ''}
+                                areaCriteriaList.map((crit) => {
+                                  const cId = getEntityId(crit, 'criteriaid');
+                                  const isCritExpanded = expandedCriteriaIds.has(cId) || (Boolean(searchLower) || (submissionFilter !== 'all' && submissionFilter !== 'priority'));
+                                  const isCritAssigned = isCriteriaAssignedToMe(cId, aId);
+                                  const critDirectUsers = assignedPersonnelMap.criteria[cId] || [];
+
+                                  let critReqs = requirements.filter(
+                                    (r) => Number(r.criteriaid ?? r.CriteriaID) === cId && matchesRequirement(r)
+                                  );
+
+                                  if (submissionFilter && submissionFilter !== 'all') {
+                                    critReqs = [...critReqs].sort((a, b) => {
+                                      const getScore = (req: any) => {
+                                        const rId = getEntityId(req, 'requirementid');
+                                        const stat = myFileStatsByReq[rId] || null;
+                                        const totFiles = Number(stat?.totalfiles || 0);
+                                        const rejCount = totFiles > 0 ? Number(stat?.rejectedcount || 0) : 0;
+                                        const pendCount = totFiles > 0 ? Number(stat?.pendingcount || 0) : 0;
+                                        const appCount = totFiles > 0 ? Number(stat?.approvedcount || 0) : 0;
+                                        return { totFiles, rejCount, pendCount, appCount };
+                                      };
+
+                                      const sa = getScore(a);
+                                      const sb = getScore(b);
+
+                                      if (submissionFilter === 'approved') return sb.appCount - sa.appCount;
+                                      if (submissionFilter === 'pending') return sb.pendCount - sa.pendCount;
+                                      if (submissionFilter === 'rejected') return sb.rejCount - sa.rejCount;
+                                      if (submissionFilter === 'unsubmitted') return (sa.totFiles === 0 ? 0 : 1) - (sb.totFiles === 0 ? 0 : 1);
+                                      if (submissionFilter === 'priority') {
+                                        const rank = (s: any) => {
+                                          if (s.rejCount > 0) return 1;
+                                          if (s.totFiles === 0) return 2;
+                                          if (s.pendCount > 0) return 3;
+                                          if (s.appCount > 0) return 4;
+                                          return 5;
+                                        };
+                                        return rank(sa) - rank(sb);
+                                      }
+                                      return 0;
+                                    });
+                                  }
+
+                                  if (submissionFilter !== 'all' && submissionFilter !== 'priority' && critReqs.length === 0) {
+                                    return null;
+                                  }
+
+                                  return (
+                                    <View key={`crit-block-${cId}`} style={s.criteriaBlock}>
+                                      {/* Horizontal Connector Branch */}
+                                      <View style={s.treeHorizontalBranch} />
+
+                                      {/* ── Criteria / Sub-area Bar (Image 3) ── */}
+                                      <TouchableOpacity
+                                        style={s.criteriaHeaderBar}
+                                        onPress={() => toggleCriteriaExpand(cId)}
+                                        activeOpacity={0.85}
+                                      >
+                                        <MaterialIcons
+                                          name={isCritExpanded ? 'keyboard-arrow-down' : 'chevron-right'}
+                                          size={20}
+                                          color="#ffffff"
+                                        />
+                                        <View style={{ flex: 1, marginLeft: 8 }}>
+                                          <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6 }}>
+                                            <Text style={s.criteriaBarTitle}>
+                                              {crit.criteriacode ? `${crit.criteriacode}. ` : ''}
+                                              {crit.criterianame || 'Sub Area'}
+                                            </Text>
+
+                                            {isCritAssigned && (
+                                              <View style={s.assignedToYouPill}>
+                                                <MaterialIcons name="check" size={10} color="#ffffff" />
+                                                <Text style={s.assignedToYouPillText}>Assigned to you</Text>
+                                              </View>
+                                            )}
+
+                                            {/* Inherited from Area Avatar */}
+                                            {visibleDirectUsers.map((u, di) => {
+                                              const avUrl = getProfilePicUrl(u.profile_pic);
+                                              return (
+                                                <View key={`inh-area-${di}`} style={s.personnelAvatarPill}>
+                                                  <SmartUserAvatar user={u} src={avUrl} fullName={u.fullname} size={14} textSize={7} />
+                                                  <Text style={s.personnelAvatarPillText} numberOfLines={1}>
+                                                    {u.fullname} <Text style={{ opacity: 0.8 }}>(Area)</Text>
+                                                  </Text>
+                                                </View>
+                                              );
+                                            })}
+                                          </View>
+
+                                          <Text style={s.criteriaDatesText}>
+                                            Created: {formatDateString(crit.createdat)} • Updated:{' '}
+                                            {formatDateString(crit.updatedat || crit.createdat)}
                                           </Text>
-                                        </TouchableOpacity>
-                                      )}
-                                      <View style={{ flex: 1 }}>
-                                        <Text style={styles.requirementCode}>
-                                          {req.RequirementCode || req.requirement_code || 'REQ'}
-                                        </Text>
-                                        <Text style={styles.requirementText}>
-                                          {req.RequirementName ||
-                                            req.requirement_name ||
-                                            req.Description ||
-                                            req.description ||
-                                            'Untitled requirement'}
-                                        </Text>
-                                      </View>
-                                      {isAdmin && !structureDeleteMode && (
-                                        <TouchableOpacity
-                                          style={[styles.structureEditBtn, styles.structureEditBtnSoft]}
-                                          onPress={() => openStructureEdit('requirement', req)}
-                                        >
-                                          <Text style={styles.structureEditIcon}>✎</Text>
-                                        </TouchableOpacity>
+                                        </View>
+                                      </TouchableOpacity>
+
+                                      {/* ── Expanded Criteria Standards (Image 3: Requirement Cards) ── */}
+                                      {isCritExpanded && (
+                                        <View style={s.critChildrenWrap}>
+                                          <View style={s.critVerticalLine} />
+
+                                          <View style={s.critChildrenInner}>
+                                            {critReqs.length === 0 ? (
+                                              <View style={s.noSubItemsCard}>
+                                                <Text style={s.noSubItemsText}>No standards assigned to this sub area</Text>
+                                              </View>
+                                            ) : (
+                                              critReqs.map((req) => {
+                                                const rId = getEntityId(req, 'requirementid');
+                                                const rCode = req.requirementcode || `REQ #${rId}`;
+                                                const rDesc = req.Description || req.description || 'Compliance Standard';
+                                                const isReqAssigned = isRequirementAssignedToMe(rId, cId, aId);
+                                                const myStat = myFileStatsByReq[rId] || null;
+                                                const sId = Number(
+                                                  req.compliancestatusid ??
+                                                    req.ComplianceStatusID ??
+                                                    req.status_id ??
+                                                    3
+                                                );
+                                                const opt = STATUS_OPTIONS.find((s) => s.id === sId) || STATUS_OPTIONS[0];
+
+                                                return (
+                                                  <View key={`req-card-${rId}`} style={s.reqCardContainer}>
+                                                    <View style={s.critHorizontalBranch} />
+
+                                                    {/* Requirement Card (Matching Image 3: bg-blue-50/80 border border-blue-200/80) */}
+                                                    <View style={s.requirementCard}>
+                                                      <View style={s.reqTopRow}>
+                                                        {/* Code Pill (e.g. A.1) */}
+                                                        <View style={s.reqCodePill}>
+                                                          <Text style={s.reqCodePillText}>{rCode}</Text>
+                                                        </View>
+
+                                                        {/* Personnel File Status Badges (replacing plain check green) */}
+                                                        {isPersonnel ? (() => {
+                                                          const totFiles = Number(myStat?.totalfiles || 0);
+                                                          const approvedCount = totFiles > 0 ? Number(myStat?.approvedcount || 0) : 0;
+                                                          const pendingCount = totFiles > 0 ? Number(myStat?.pendingcount || 0) : 0;
+                                                          const rejectedCount = totFiles > 0 ? Number(myStat?.rejectedcount || 0) : 0;
+
+                                                          return (
+                                                            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 4, flexWrap: 'wrap' }}>
+                                                              {isReqAssigned && (
+                                                                <View style={s.assignedToYouPillGreen}>
+                                                                  <Text style={s.assignedToYouPillGreenText}>
+                                                                    Assigned
+                                                                  </Text>
+                                                                </View>
+                                                              )}
+                                                              {approvedCount > 0 && (
+                                                                <View style={s.statBadgeApproved}>
+                                                                  <View style={s.statDotApproved} />
+                                                                  <Text style={s.statBadgeTextApproved}>{approvedCount} approved</Text>
+                                                                </View>
+                                                              )}
+                                                              {pendingCount > 0 && (
+                                                                <View style={s.statBadgePending}>
+                                                                  <View style={s.statDotPending} />
+                                                                  <Text style={s.statBadgeTextPending}>{pendingCount} pending</Text>
+                                                                </View>
+                                                              )}
+                                                              {rejectedCount > 0 && (
+                                                                <View style={s.statBadgeRejected}>
+                                                                  <View style={s.statDotRejected} />
+                                                                  <Text style={s.statBadgeTextRejected}>{rejectedCount} rejected</Text>
+                                                                </View>
+                                                              )}
+                                                              {totFiles === 0 && (
+                                                                <View style={s.statBadgeEmpty}>
+                                                                  <Text style={s.statBadgeTextEmpty}>0 files</Text>
+                                                                </View>
+                                                              )}
+                                                            </View>
+                                                          );
+                                                        })() : (
+                                                          isReqAssigned && (
+                                                            <View style={s.assignedToYouPillGreen}>
+                                                              <MaterialIcons name="check" size={10} color="#059669" />
+                                                              <Text style={s.assignedToYouPillGreenText}>
+                                                                Assigned to you
+                                                              </Text>
+                                                            </View>
+                                                          )
+                                                        )}
+
+                                                        {/* Avatar pill for Area assignee */}
+                                                         {visibleDirectUsers.map((u, ui) => {
+                                                           const avUrl = getProfilePicUrl(u.profile_pic);
+                                                           return (
+                                                             <View key={`ru-${ui}`} style={s.reqAssigneePill}>
+                                                               <SmartUserAvatar user={u} src={avUrl} fullName={u.fullname} size={14} textSize={7} />
+                                                               <Text style={s.reqAssigneePillText} numberOfLines={1}>
+                                                                 {u.fullname} <Text style={{ color: '#94a3b8' }}>(Area)</Text>
+                                                               </Text>
+                                                             </View>
+                                                           );
+                                                         })}
+                                                      </View>
+
+                                                      {/* Standard Description */}
+                                                      <Text style={s.requirementDesc}>{rDesc}</Text>
+
+                                                      {/* Created & Updated dates */}
+                                                      <Text style={s.reqDatesText}>
+                                                        Created: {formatDateString(req.createdat)} • Updated:{' '}
+                                                        {formatDateString(req.updatedat || req.createdat)}
+                                                      </Text>
+
+                                                      {/* Action Buttons: Submissions (Evidence) + Evaluate (Auditor) */}
+                                                      <View style={s.reqActionsRow}>
+                                                        {/* Compliance status badge */}
+                                                        <View
+                                                          style={[
+                                                            s.statusBadge,
+                                                            { backgroundColor: opt.bg, borderColor: opt.border },
+                                                          ]}
+                                                        >
+                                                          <View style={[s.statusDot, { backgroundColor: opt.color }]} />
+                                                          <Text style={[s.statusBadgeText, { color: opt.color }]}>
+                                                            {opt.label}
+                                                          </Text>
+                                                        </View>
+
+                                                        <View style={{ flexDirection: 'row', gap: 6 }}>
+                                                          {/* Submissions Button */}
+                                                          <TouchableOpacity
+                                                            style={s.submissionsBtn}
+                                                            onPress={() => setEvidencePanelReq(req)}
+                                                          >
+                                                            <MaterialIcons name="folder-shared" size={14} color="#1d4ed8" />
+                                                            <Text style={s.submissionsBtnText}>Submissions</Text>
+                                                          </TouchableOpacity>
+
+                                                          {/* Auditor Evaluate Button */}
+                                                          {isAuditor ? (
+                                                            <TouchableOpacity
+                                                              style={s.evaluateBtn}
+                                                              onPress={() => {
+                                                                setEvaluatingReq(req);
+                                                                setEvalStatusId(sId);
+                                                                setEvalComments(req.comment || '');
+                                                              }}
+                                                            >
+                                                              <MaterialIcons name="tune" size={14} color="#059669" />
+                                                              <Text style={s.evaluateBtnText}>Evaluate</Text>
+                                                            </TouchableOpacity>
+                                                          ) : null}
+                                                        </View>
+                                                      </View>
+                                                    </View>
+                                                  </View>
+                                                );
+                                              })
+                                            )}
+                                          </View>
+                                        </View>
                                       )}
                                     </View>
-                                  </View>
-                                    );
-                                  })()
-                                ))
+                                  );
+                                })
                               )}
                             </View>
-                          )}
-                        </View>
-                      );
-                    })
-                  )}
+                          </View>
+                        )}
+                      </View>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </View>
+          ) : (
+            /* ─── Tab Content: PROGRAMS AND OFFICES (Matching Image 2 Left Column) ─── */
+            <View style={{ flex: 1 }}>
+              <View style={s.officeSearchRow}>
+                <View style={s.treeSearchBox}>
+                  <MaterialIcons name="search" size={18} color="#64748b" />
+                  <TextInput
+                    style={s.treeSearchInput}
+                    placeholder="Search programs and offices..."
+                    placeholderTextColor="#94a3b8"
+                    value={officeSearch}
+                    onChangeText={setOfficeSearch}
+                  />
+                  {officeSearch ? (
+                    <TouchableOpacity onPress={() => setOfficeSearch('')}>
+                      <MaterialIcons name="close" size={16} color="#64748b" />
+                    </TouchableOpacity>
+                  ) : null}
                 </View>
+
+                {/* Filter Pills: All | Programs | Offices */}
+                <View style={s.officeFilterPillsRow}>
+                  {(['All', 'Programs', 'Offices'] as const).map((tab) => (
+                    <TouchableOpacity
+                      key={`otab-${tab}`}
+                      style={[s.officeFilterPill, activeOfficeTab === tab && s.officeFilterPillActive]}
+                      onPress={() => setActiveOfficeTab(tab)}
+                    >
+                      <Text
+                        style={[
+                          s.officeFilterPillText,
+                          activeOfficeTab === tab && s.officeFilterPillTextActive,
+                        ]}
+                      >
+                        {tab}
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              </View>
+
+              <ScrollView
+                style={{ flex: 1 }}
+                contentContainerStyle={{ padding: 14, paddingBottom: 60 }}
+              >
+                {filteredOffices.length === 0 ? (
+                  <View style={s.emptyCard}>
+                    <MaterialIcons name="apartment" size={42} color="#94a3b8" />
+                    <Text style={s.emptyTitle}>No Programs or Offices</Text>
+                    <Text style={s.emptySubtitle}>No units match your current filter.</Text>
+                  </View>
+                ) : (
+                  filteredOffices.map((off, idx) => {
+                    const isProgram =
+                      off.entitytypeid === 1 ||
+                      String(off.category_name || off.typename || '').toLowerCase().includes('academic') ||
+                      String(off.category_name || off.typename || '').toLowerCase().includes('program');
+                    const offName = off.officename || off.OfficeName || 'Unit';
+                    const dept = off.department_name || off.TypeName || (isProgram ? 'IBED' : 'Institution-wide');
+
+                    return (
+                      <View key={`off-card-${idx}`} style={s.programOfficeCard}>
+                        <View style={{ flexDirection: 'row', alignItems: 'flex-start' }}>
+                          <View style={isProgram ? s.programIconBox : s.officeIconBox}>
+                            <MaterialIcons
+                              name={isProgram ? 'school' : 'business'}
+                              size={20}
+                              color={isProgram ? '#0284c7' : '#059669'}
+                            />
+                          </View>
+                          <View style={{ flex: 1, marginLeft: 12 }}>
+                            <Text style={s.programOfficeName}>{offName}</Text>
+                            <Text style={s.programOfficeDept}>{dept}</Text>
+
+                            <View style={s.programOfficeMetaDates}>
+                              <Text style={s.programOfficeDatesText}>
+                                CREATED {formatDateString(off.createdat)}   UPDATED{' '}
+                                {formatDateString(off.updatedat || off.createdat)}
+                              </Text>
+                            </View>
+
+                            <View style={s.programOfficeBadgesRow}>
+                              <View style={isProgram ? s.academicBadge : s.nonAcademicBadge}>
+                                <Text style={isProgram ? s.academicBadgeText : s.nonAcademicBadgeText}>
+                                  {isProgram ? 'Academic Program' : 'Non-Academic Office'}
+                                </Text>
+                              </View>
+                              {off.accreditation_level || off.Level ? (
+                                <View style={s.levelBadge}>
+                                  <Text style={s.levelBadgeText}>{off.accreditation_level || off.Level}</Text>
+                                </View>
+                              ) : null}
+                              <Text style={s.instWideLabel}>
+                                {String(dept).toUpperCase()}
+                              </Text>
+                            </View>
+                          </View>
+                        </View>
+                      </View>
+                    );
+                  })
+                )}
               </ScrollView>
-            )}
-          </View>
+            </View>
+          )}
         </View>
       </Modal>
 
-      <Modal
-        visible={manageStructureOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setManageStructureOpen(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setManageStructureOpen(false)}>
-          <Pressable style={styles.manageModalCard}>
-            <View style={styles.manageHeaderRow}>
-              <Text style={styles.manageTitle}>Manage Structure</Text>
-              <TouchableOpacity style={styles.closeModalBtn} onPress={() => setManageStructureOpen(false)}>
-                <Text style={styles.closeModalBtnText}>X</Text>
+      {/* ─── Evidence Files Panel Modal ─── */}
+      {evidencePanelReq && (
+        <EvidenceFilesPanel
+          visible={Boolean(evidencePanelReq)}
+          requirement={evidencePanelReq}
+          isAuditor={isAuditor}
+          currentUser={currentUser}
+          officeId={evidencePanelReq?.officeid || evidencePanelReq?.officeId}
+          onClose={() => setEvidencePanelReq(null)}
+          onViewFile={(f) => setLightboxFile(f)}
+          onRefreshRequirements={() => {
+            void refreshStructureData({ silent: true });
+          }}
+        />
+      )}
+
+      {/* ─── Lightbox Viewer ─── */}
+      <UserFileLightbox
+        visible={Boolean(lightboxFile)}
+        file={lightboxFile}
+        allowDownload={!isAuditor}
+        onClose={() => setLightboxFile(null)}
+      />
+
+      {/* ─── Auditor Evaluation Modal ─── */}
+      <Modal visible={Boolean(evaluatingReq)} transparent animationType="fade">
+        <View style={s.modalOverlay}>
+          <View style={s.modalCard}>
+            <View style={s.modalHeaderRow}>
+              <View>
+                <Text style={s.modalTitle}>Auditor Assessment</Text>
+                <Text style={s.modalSub}>
+                  {evaluatingReq?.RequirementCode || evaluatingReq?.requirementcode || 'Standard'}
+                </Text>
+              </View>
+              <TouchableOpacity onPress={() => setEvaluatingReq(null)}>
+                <MaterialIcons name="close" size={20} color="#64748b" />
               </TouchableOpacity>
             </View>
 
-            <View style={styles.manageMainTabs}>
-              <TouchableOpacity
-                style={[styles.manageMainTabBtn, manageMainTab === 'add' && styles.manageMainTabBtnActive]}
-                onPress={() => setManageMainTab('add')}
-              >
-                <Text
-                  style={[
-                    styles.manageMainTabText,
-                    manageMainTab === 'add' && styles.manageMainTabTextActive,
-                  ]}
-                >
-                  Add
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[
-                  styles.manageMainTabBtn,
-                  manageMainTab === 'assign' && styles.manageMainTabBtnActive,
-                ]}
-                onPress={() => setManageMainTab('assign')}
-              >
-                <Text
-                  style={[
-                    styles.manageMainTabText,
-                    manageMainTab === 'assign' && styles.manageMainTabTextActive,
-                  ]}
-                >
-                  Assign To Offices
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {manageMainTab === 'add' && (
-              <View style={styles.manageTabs}>
-                <TouchableOpacity
-                  style={[styles.manageTabBtn, manageTab === 'add-area' && styles.manageTabBtnActive]}
-                  onPress={() => setManageTab('add-area')}
-                >
-                  <Text style={[styles.manageTabText, manageTab === 'add-area' && styles.manageTabTextActive]}>
-                    Add Area
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.manageTabBtn, manageTab === 'add-criteria' && styles.manageTabBtnActive]}
-                  onPress={() => setManageTab('add-criteria')}
-                >
-                  <Text style={[styles.manageTabText, manageTab === 'add-criteria' && styles.manageTabTextActive]}>
-                    Add Criteria
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.manageTabBtn, manageTab === 'add-requirement' && styles.manageTabBtnActive]}
-                  onPress={() => setManageTab('add-requirement')}
-                >
-                  <Text
+            <Text style={s.modalSectionLabel}>Compliance Rating</Text>
+            <View style={s.statusOptionRow}>
+              {STATUS_OPTIONS.map((opt) => {
+                const isSelected = evalStatusId === opt.id;
+                return (
+                  <TouchableOpacity
+                    key={`eval-opt-${opt.id}`}
                     style={[
-                      styles.manageTabText,
-                      manageTab === 'add-requirement' && styles.manageTabTextActive,
+                      s.statusOptionBtn,
+                      isSelected && {
+                        backgroundColor: opt.bg,
+                        borderColor: opt.color,
+                        borderWidth: 2,
+                      },
                     ]}
+                    onPress={() => setEvalStatusId(opt.id)}
                   >
-                    Add Requirement
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {manageMainTab === 'add' && manageTab === 'add-area' && (
-              <View style={styles.manageFormWrap}>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Area Code"
-                  placeholderTextColor="#94a3b8"
-                  value={areaForm.AreaCode}
-                  onChangeText={(text) => setAreaForm((prev) => ({ ...prev, AreaCode: text }))}
-                />
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Area Name"
-                  placeholderTextColor="#94a3b8"
-                  value={areaForm.AreaName}
-                  onChangeText={(text) => setAreaForm((prev) => ({ ...prev, AreaName: text }))}
-                />
-                <TextInput
-                  style={[styles.formInput, styles.formTextArea]}
-                  placeholder="Description"
-                  placeholderTextColor="#94a3b8"
-                  value={areaForm.Description}
-                  onChangeText={(text) => setAreaForm((prev) => ({ ...prev, Description: text }))}
-                  multiline
-                />
-                <TouchableOpacity style={styles.submitBtn} onPress={handleAddAreaToStructure}>
-                  <Text style={styles.submitBtnText}>Save Area</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {manageMainTab === 'add' && manageTab === 'add-criteria' && (
-              <View style={styles.manageFormWrap}>
-                <Text style={styles.formLabel}>Area (optional)</Text>
-                <View style={[styles.dropdownWrap, criteriaAreaDropdownOpen && styles.dropdownWrapOpen]}>
-                  <TouchableOpacity
-                    style={styles.dropdownTrigger}
-                    onPress={() => setCriteriaAreaDropdownOpen((prev) => !prev)}
-                  >
-                    <Text style={styles.dropdownTriggerText}>
-                      {criteriaForm.AreaID
-                        ? (() => {
-                            const selected = eventAreas.find((item: any) => String(item.id) === criteriaForm.AreaID);
-                            if (!selected) return 'No Area (optional)';
-                            return selected.code
-                              ? `${selected.code} - ${selected.name}`
-                              : selected.name;
-                          })()
-                        : 'No Area (optional)'}
+                    <View style={[s.statusDot, { backgroundColor: opt.color }]} />
+                    <Text
+                      style={[
+                        s.statusOptionBtnText,
+                        isSelected && { color: opt.color, fontWeight: '700' },
+                      ]}
+                    >
+                      {opt.label}
                     </Text>
-                    <Text style={styles.dropdownArrow}>{criteriaAreaDropdownOpen ? '▴' : '▾'}</Text>
                   </TouchableOpacity>
+                );
+              })}
+            </View>
 
-                  {criteriaAreaDropdownOpen && (
-                    <ScrollView style={styles.dropdownMenuList}>
-                      <TouchableOpacity
-                        style={styles.dropdownMenuItem}
-                        onPress={() => onSelectCriteriaArea('')}
-                      >
-                        <Text style={styles.dropdownMenuItemText}>No Area (optional)</Text>
-                      </TouchableOpacity>
-
-                      {eventAreas.map((area: any) => (
-                        <TouchableOpacity
-                          key={`criteria-area-${area.id}`}
-                          style={styles.dropdownMenuItem}
-                          onPress={() => onSelectCriteriaArea(String(area.id))}
-                        >
-                          <Text style={styles.dropdownMenuItemText}>
-                            {area.code ? `${area.code} - ${area.name}` : area.name}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  )}
-                </View>
-
-                <Text style={styles.formLabel}>Criteria Code (editable)</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Criteria Code"
-                  placeholderTextColor="#94a3b8"
-                  value={criteriaForm.CriteriaCode}
-                  onChangeText={(text) => setCriteriaForm((prev) => ({ ...prev, CriteriaCode: text }))}
-                />
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Criteria Name"
-                  placeholderTextColor="#94a3b8"
-                  value={criteriaForm.CriteriaName}
-                  onChangeText={(text) => setCriteriaForm((prev) => ({ ...prev, CriteriaName: text }))}
-                />
-                <TextInput
-                  style={[styles.formInput, styles.formTextArea]}
-                  placeholder="Description"
-                  placeholderTextColor="#94a3b8"
-                  value={criteriaForm.Description}
-                  onChangeText={(text) => setCriteriaForm((prev) => ({ ...prev, Description: text }))}
-                  multiline
-                />
-                <TouchableOpacity style={styles.submitBtn} onPress={handleAddCriteriaToStructure}>
-                  <Text style={styles.submitBtnText}>Save Criteria</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {manageMainTab === 'add' && manageTab === 'add-requirement' && (
-              <View style={styles.manageFormWrap}>
-                <Text style={styles.formLabel}>Area</Text>
-                <View style={[styles.dropdownWrap, requirementAreaDropdownOpen && styles.dropdownWrapOpen]}>
-                  <TouchableOpacity
-                    style={styles.dropdownTrigger}
-                    onPress={() => setRequirementAreaDropdownOpen((prev) => !prev)}
-                  >
-                    <Text style={styles.dropdownTriggerText}>
-                      {requirementForm.AreaFilter
-                        ? (() => {
-                            const selected = eventAreas.find((item: any) => String(item.id) === requirementForm.AreaFilter);
-                            return selected
-                              ? selected.code
-                                ? `${selected.code} - ${selected.name}`
-                                : selected.name
-                              : 'Select area';
-                          })()
-                        : 'Select area'}
-                    </Text>
-                    <Text style={styles.dropdownArrow}>{requirementAreaDropdownOpen ? '▴' : '▾'}</Text>
-                  </TouchableOpacity>
-
-                  {requirementAreaDropdownOpen && (
-                    <ScrollView style={styles.dropdownMenuList}>
-                      {eventAreas.map((area: any) => (
-                        <TouchableOpacity
-                          key={`requirement-area-${area.id}`}
-                          style={styles.dropdownMenuItem}
-                          onPress={() => onSelectRequirementArea(String(area.id))}
-                        >
-                          <Text style={styles.dropdownMenuItemText}>
-                            {area.code ? `${area.code} - ${area.name}` : area.name}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                  )}
-                </View>
-
-                <Text style={styles.formLabel}>Criteria</Text>
-                <View style={[styles.dropdownWrap, requirementCriteriaDropdownOpen && styles.dropdownWrapOpen]}>
-                  <TouchableOpacity
-                    style={styles.dropdownTrigger}
-                    onPress={() => {
-                      if (!requirementForm.AreaFilter) return;
-                      setRequirementCriteriaDropdownOpen((prev) => !prev);
-                    }}
-                  >
-                    <Text style={styles.dropdownTriggerText}>
-                      {requirementForm.CriteriaID
-                        ? (() => {
-                            const selected = filteredCriteriaOptions.find(
-                              (item: any) => String(item.id) === requirementForm.CriteriaID
-                            );
-                            return selected
-                              ? selected.code
-                                ? `${selected.code} - ${selected.name}`
-                                : selected.name
-                              : 'Select criteria';
-                          })()
-                        : requirementForm.AreaFilter
-                          ? 'Select criteria'
-                          : 'Select area first'}
-                    </Text>
-                    <Text style={styles.dropdownArrow}>{requirementCriteriaDropdownOpen ? '▴' : '▾'}</Text>
-                  </TouchableOpacity>
-
-                  {requirementCriteriaDropdownOpen && (
-                    <ScrollView style={styles.dropdownMenuList}>
-                      {filteredCriteriaOptions.length === 0 ? (
-                        <View style={styles.dropdownMenuItem}>
-                          <Text style={styles.dropdownMenuEmptyText}>No criteria found under this area.</Text>
-                        </View>
-                      ) : (
-                        filteredCriteriaOptions.map((criterion: any) => (
-                          <TouchableOpacity
-                            key={`requirement-criteria-${criterion.id}`}
-                            style={styles.dropdownMenuItem}
-                            onPress={() => onSelectRequirementCriteria(String(criterion.id))}
-                          >
-                            <Text style={styles.dropdownMenuItemText}>
-                              {criterion.code ? `${criterion.code} - ${criterion.name}` : criterion.name}
-                            </Text>
-                          </TouchableOpacity>
-                        ))
-                      )}
-                    </ScrollView>
-                  )}
-                </View>
-
-                <Text style={styles.formLabel}>Parent Requirement (optional)</Text>
-                <View style={[styles.dropdownWrap, parentRequirementDropdownOpen && styles.dropdownWrapOpen]}>
-                  <TouchableOpacity
-                    style={styles.dropdownTrigger}
-                    onPress={() => {
-                      if (!requirementForm.CriteriaID) return;
-                      setParentRequirementDropdownOpen((prev) => !prev);
-                    }}
-                  >
-                    <Text style={styles.dropdownTriggerText}>
-                      {requirementForm.ParentRequirementCode ||
-                        (requirementForm.CriteriaID
-                          ? loadingParents
-                            ? 'Loading parent requirements...'
-                            : 'No parent requirement (optional)'
-                          : 'Select criteria first')}
-                    </Text>
-                    <Text style={styles.dropdownArrow}>{parentRequirementDropdownOpen ? '▴' : '▾'}</Text>
-                  </TouchableOpacity>
-
-                  {parentRequirementDropdownOpen && (
-                    <ScrollView style={styles.dropdownMenuList}>
-                      <TouchableOpacity
-                        style={styles.dropdownMenuItem}
-                        onPress={() => onSelectParentRequirement('')}
-                      >
-                        <Text style={styles.dropdownMenuItemText}>No parent requirement (optional)</Text>
-                      </TouchableOpacity>
-
-                      {parentRequirementOptions.map((req: any) => {
-                        const reqCode = req.RequirementCode || req.requirement_code || '';
-                        const reqDesc = req.Description || req.RequirementName || req.requirement_name || '';
-                        return (
-                          <TouchableOpacity
-                            key={`parent-req-${toId(req.RequirementID, req.requirement_id, req.id)}`}
-                            style={styles.dropdownMenuItem}
-                            onPress={() => onSelectParentRequirement(String(reqCode))}
-                          >
-                            <Text style={styles.dropdownMenuItemText}>
-                              {reqCode ? `${reqCode} - ${reqDesc}` : reqDesc || 'Requirement'}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </ScrollView>
-                  )}
-                </View>
-
-                <Text style={styles.formLabel}>Requirement Code (editable)</Text>
-                <TextInput
-                  style={styles.formInput}
-                  placeholder="Requirement Code (optional)"
-                  placeholderTextColor="#94a3b8"
-                  value={requirementForm.RequirementCode}
-                  onChangeText={(text) =>
-                    setRequirementForm((prev) => ({ ...prev, RequirementCode: text }))
-                  }
-                />
-                <TextInput
-                  style={[styles.formInput, styles.formTextArea]}
-                  placeholder="Description"
-                  placeholderTextColor="#94a3b8"
-                  value={requirementForm.Description}
-                  onChangeText={(text) =>
-                    setRequirementForm((prev) => ({ ...prev, Description: text }))
-                  }
-                  multiline
-                />
-                <TouchableOpacity style={styles.submitBtn} onPress={handleAddRequirementToStructure}>
-                  <Text style={styles.submitBtnText}>Save Requirement</Text>
-                </TouchableOpacity>
-              </View>
-            )}
-
-            {manageMainTab === 'assign' && (
-              <View style={styles.assignWrap}>
-                <View style={styles.assignHeaderRow}>
-                  <Text style={styles.assignTitle}>Bulk Assign Requirements To Offices</Text>
-                  <Text style={styles.assignHint}>Select offices and requirements, then assign in one action.</Text>
-                </View>
-
-                {loadingAssignmentData ? (
-                  <View style={styles.structureLoadingWrap}>
-                    <ActivityIndicator size="small" color="#0ea5b7" />
-                    <Text style={styles.loadingText}>Loading offices and requirements...</Text>
-                  </View>
-                ) : (
-                  <>
-                    <View style={styles.assignColumns}>
-                      <View style={styles.assignPanel}>
-                        <View style={styles.assignPanelHeader}>
-                          <Text style={styles.assignPanelTitle}>Offices</Text>
-                          <TouchableOpacity
-                            onPress={() => {
-                              const filteredOfficeIds = eventOffices
-                                .filter((office: any) => {
-                                  const label = String(
-                                    office.office_name || office.OfficeName || ''
-                                  ).toLowerCase();
-                                  const query = officeSearchTerm.trim().toLowerCase();
-                                  return !query || label.includes(query);
-                                })
-                                .map((office: any) => toId(office.id, office.OfficeID));
-
-                              const allSelected =
-                                filteredOfficeIds.length > 0 &&
-                                filteredOfficeIds.every((id: number) => selectedAssignOfficeIds.has(id));
-
-                              setSelectedAssignOfficeIds((prev) => {
-                                const next = new Set(prev);
-                                filteredOfficeIds.forEach((id: number) => {
-                                  if (allSelected) next.delete(id);
-                                  else next.add(id);
-                                });
-                                return next;
-                              });
-                            }}
-                          >
-                            <Text style={styles.assignSelectAllText}>Select all</Text>
-                          </TouchableOpacity>
-                        </View>
-
-                        <TextInput
-                          style={styles.assignSearchInput}
-                          placeholder="Search offices..."
-                          placeholderTextColor="#94a3b8"
-                          value={officeSearchTerm}
-                          onChangeText={setOfficeSearchTerm}
-                        />
-
-                        <ScrollView style={styles.assignList}>
-                          {eventOffices
-                            .filter((office: any) => {
-                              const label = String(
-                                office.office_name || office.OfficeName || ''
-                              ).toLowerCase();
-                              const query = officeSearchTerm.trim().toLowerCase();
-                              return !query || label.includes(query);
-                            })
-                            .map((office: any) => {
-                              const officeId = toId(office.id, office.OfficeID);
-                              const checked = selectedAssignOfficeIds.has(officeId);
-                              const label = office.office_name || office.OfficeName || `Office ${officeId}`;
-
-                              return (
-                                <TouchableOpacity
-                                  key={String(officeId)}
-                                  style={[styles.assignItemRow, checked && styles.assignItemRowActive]}
-                                  onPress={() => toggleAssignOffice(officeId, !checked)}
-                                >
-                                  <View
-                                    style={[
-                                      styles.assignCheckbox,
-                                      checked && styles.assignCheckboxActive,
-                                    ]}
-                                  >
-                                    <Text style={styles.assignCheckboxText}>{checked ? '✓' : ''}</Text>
-                                  </View>
-                                  <Text style={styles.assignItemText}>{label}</Text>
-                                </TouchableOpacity>
-                              );
-                            })}
-                        </ScrollView>
-                      </View>
-
-                      <View style={styles.assignPanelLarge}>
-                        <View style={styles.assignPanelHeader}>
-                          <Text style={styles.assignPanelTitle}>Requirements by Area and Criteria</Text>
-                          <TouchableOpacity
-                            onPress={() => {
-                              const ids: number[] = [];
-                              areasWithContent.forEach((area) => {
-                                area.criteria.forEach((criterion: any) => {
-                                  const criteriaId = toId(
-                                    criterion.CriteriaID,
-                                    criterion.criteria_id,
-                                    criterion.id
-                                  );
-                                  (requirementsByCriteria[criteriaId] || []).forEach((req: any) => {
-                                    const reqId = toId(req.RequirementID, req.requirement_id, req.id);
-                                    if (reqId) ids.push(reqId);
-                                  });
-                                });
-                              });
-                              visibleNoAreaCriteria.forEach((criterion: any) => {
-                                (criterion.requirements || []).forEach((req: any) => {
-                                  const reqId = toId(req.RequirementID, req.requirement_id, req.id);
-                                  if (reqId) ids.push(reqId);
-                                });
-                              });
-                              const uniqueIds = [...new Set(ids)];
-                              const allSelected =
-                                uniqueIds.length > 0 &&
-                                uniqueIds.every((id) => selectedAssignRequirementIds.has(id));
-                              toggleAssignRequirementBatch(uniqueIds, !allSelected);
-                            }}
-                          >
-                            <Text style={styles.assignSelectAllText}>Select all</Text>
-                          </TouchableOpacity>
-                        </View>
-
-                        <TextInput
-                          style={styles.assignSearchInput}
-                          placeholder="Search areas, criteria, or requirements..."
-                          placeholderTextColor="#94a3b8"
-                          value={requirementAssignSearchTerm}
-                          onChangeText={setRequirementAssignSearchTerm}
-                        />
-
-                        <ScrollView style={styles.assignList}>
-                          {areasWithContent.map((area) => {
-                            const areaRequirementIds: number[] = area.criteria.flatMap((criterion: any) => {
-                              const criteriaId = toId(
-                                criterion.CriteriaID,
-                                criterion.criteria_id,
-                                criterion.id
-                              );
-                              return (requirementsByCriteria[criteriaId] || [])
-                                .map((req: any) => toId(req.RequirementID, req.requirement_id, req.id))
-                                .filter(Boolean);
-                            });
-
-                            const areaChecked =
-                              areaRequirementIds.length > 0 &&
-                              areaRequirementIds.every((id) => selectedAssignRequirementIds.has(id));
-
-                            return (
-                              <View key={String(toId(area.AreaID, area.area_id, area.id))} style={styles.assignAreaBlock}>
-                                <TouchableOpacity
-                                  style={styles.assignAreaHeader}
-                                  onPress={() =>
-                                    toggleAssignRequirementBatch(areaRequirementIds, !areaChecked)
-                                  }
-                                >
-                                  <View style={[styles.assignCheckbox, areaChecked && styles.assignCheckboxActive]}>
-                                    <Text style={styles.assignCheckboxText}>{areaChecked ? '✓' : ''}</Text>
-                                  </View>
-                                  <Text style={styles.assignAreaHeaderText}>
-                                    {area.AreaName || area.area_name || 'Area'}
-                                  </Text>
-                                </TouchableOpacity>
-
-                                {area.criteria.map((criterion: any) => {
-                                  const criteriaId = toId(
-                                    criterion.CriteriaID,
-                                    criterion.criteria_id,
-                                    criterion.id
-                                  );
-                                  const reqs = (criterion.requirements || []).filter((req: any) => {
-                                    const q = requirementAssignSearchTerm.trim().toLowerCase();
-                                    if (!q) return true;
-                                    return (
-                                      String(req.RequirementCode || '').toLowerCase().includes(q) ||
-                                      String(req.Description || req.RequirementName || '').toLowerCase().includes(q)
-                                    );
-                                  });
-                                  const criterionReqIds = reqs
-                                    .map((req: any) => toId(req.RequirementID, req.requirement_id, req.id))
-                                    .filter(Boolean);
-
-                                  if (reqs.length === 0 && requirementAssignSearchTerm.trim()) return null;
-
-                                  const criterionChecked =
-                                    criterionReqIds.length > 0 &&
-                                    criterionReqIds.every((id: number) => selectedAssignRequirementIds.has(id));
-
-                                  return (
-                                    <View key={String(criteriaId)} style={styles.assignCriteriaBlock}>
-                                      <TouchableOpacity
-                                        style={styles.assignCriteriaHeader}
-                                        onPress={() =>
-                                          toggleAssignRequirementBatch(criterionReqIds, !criterionChecked)
-                                        }
-                                      >
-                                        <View
-                                          style={[
-                                            styles.assignCheckbox,
-                                            criterionChecked && styles.assignCheckboxActive,
-                                          ]}
-                                        >
-                                          <Text style={styles.assignCheckboxText}>{criterionChecked ? '✓' : ''}</Text>
-                                        </View>
-                                        <Text style={styles.assignCriteriaHeaderText}>
-                                          {criterion.CriteriaCode || criterion.criteria_code || 'C'} -{' '}
-                                          {criterion.CriteriaName || criterion.criteria_name || 'Criteria'}
-                                        </Text>
-                                      </TouchableOpacity>
-
-                                      {reqs.map((req: any) => {
-                                        const reqId = toId(req.RequirementID, req.requirement_id, req.id);
-                                        const checked = selectedAssignRequirementIds.has(reqId);
-                                        return (
-                                          <TouchableOpacity
-                                            key={String(reqId)}
-                                            style={[styles.assignReqRow, checked && styles.assignItemRowActive]}
-                                            onPress={() => toggleAssignRequirement(reqId, !checked)}
-                                          >
-                                            <View
-                                              style={[
-                                                styles.assignCheckbox,
-                                                checked && styles.assignCheckboxActive,
-                                              ]}
-                                            >
-                                              <Text style={styles.assignCheckboxText}>{checked ? '✓' : ''}</Text>
-                                            </View>
-                                            <Text style={styles.assignReqText}>
-                                              {req.RequirementCode || 'REQ'} -{' '}
-                                              {req.Description || req.RequirementName || 'Requirement'}
-                                            </Text>
-                                          </TouchableOpacity>
-                                        );
-                                      })}
-                                    </View>
-                                  );
-                                })}
-                              </View>
-                            );
-                          })}
-                        </ScrollView>
-                      </View>
-                    </View>
-
-                    <View style={styles.assignFooter}>
-                      <Text style={styles.assignFooterText}>
-                        Selected: {selectedAssignOfficeIds.size} office(s), {selectedAssignRequirementIds.size} requirement(s)
-                      </Text>
-                      <TouchableOpacity
-                        style={[styles.submitBtn, assigningRequirements && { opacity: 0.7 }]}
-                        onPress={handleAssignSelected}
-                        disabled={assigningRequirements}
-                      >
-                        <Text style={styles.submitBtnText}>
-                          {assigningRequirements ? 'Assigning...' : 'Assign Selected'}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
-              </View>
-            )}
-          </Pressable>
-        </Pressable>
-      </Modal>
-
-      <Modal
-        visible={editStructureOpen}
-        transparent
-        animationType="fade"
-        onRequestClose={() => setEditStructureOpen(false)}
-      >
-        <Pressable style={styles.modalOverlay} onPress={() => setEditStructureOpen(false)}>
-          <Pressable style={styles.formModalCard}>
-            <Text style={styles.formModalTitle}>
-              {editStructureType === 'area'
-                ? 'Edit Area'
-                : editStructureType === 'criteria'
-                  ? 'Edit Criteria'
-                  : 'Edit Requirement'}
-            </Text>
-
-            <Text style={styles.formLabel}>
-              {editStructureType === 'requirement' ? 'Requirement Code' : 'Code'}
-            </Text>
+            <Text style={[s.modalSectionLabel, { marginTop: 14 }]}>Audit Findings / Remarks</Text>
             <TextInput
-              style={styles.formInput}
-              value={editStructureCode}
-              onChangeText={setEditStructureCode}
-              placeholder={editStructureType === 'requirement' ? 'Requirement code (optional)' : 'Enter code'}
-              placeholderTextColor="#94a3b8"
-            />
-
-            {editStructureType !== 'requirement' && (
-              <>
-                <Text style={styles.formLabel}>Name</Text>
-                <TextInput
-                  style={styles.formInput}
-                  value={editStructureName}
-                  onChangeText={setEditStructureName}
-                  placeholder="Enter name"
-                  placeholderTextColor="#94a3b8"
-                />
-              </>
-            )}
-
-            <Text style={styles.formLabel}>Description</Text>
-            <TextInput
-              style={[styles.formInput, styles.formTextArea]}
-              value={editStructureDescription}
-              onChangeText={setEditStructureDescription}
-              placeholder="Enter description"
+              style={s.modalCommentsInput}
+              placeholder="Enter auditor findings, recommendations, or requirements..."
               placeholderTextColor="#94a3b8"
               multiline
-              textAlignVertical="top"
+              numberOfLines={4}
+              value={evalComments}
+              onChangeText={setEvalComments}
             />
 
-            <View style={styles.formActions}>
-              <TouchableOpacity
-                style={styles.cancelBtn}
-                onPress={() => setEditStructureOpen(false)}
-                disabled={savingStructureEdit}
-              >
-                <Text style={styles.cancelBtnText}>Cancel</Text>
+            <View style={s.modalActionsRow}>
+              <TouchableOpacity style={s.modalCancelBtn} onPress={() => setEvaluatingReq(null)}>
+                <Text style={s.modalCancelBtnText}>Cancel</Text>
               </TouchableOpacity>
               <TouchableOpacity
-                style={[styles.submitBtn, savingStructureEdit && { opacity: 0.7 }]}
-                onPress={handleSaveStructureEdit}
-                disabled={savingStructureEdit}
+                style={s.modalSaveBtn}
+                onPress={handleSaveEvaluation}
+                disabled={evalSaving}
               >
-                <Text style={styles.submitBtnText}>{savingStructureEdit ? 'Saving...' : 'Save'}</Text>
+                {evalSaving ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="save" size={16} color="#fff" />
+                    <Text style={s.modalSaveBtnText}>Save Assessment</Text>
+                  </>
+                )}
               </TouchableOpacity>
             </View>
-          </Pressable>
-        </Pressable>
+          </View>
+        </View>
       </Modal>
     </View>
   );
 }
 
-function EventFormModal({
-  visible,
-  title,
-  formState,
-  setFormState,
-  submitText,
-  onClose,
-  onSubmit,
-}: {
-  visible: boolean;
-  title: string;
-  formState: EventFormState;
-  setFormState: React.Dispatch<React.SetStateAction<EventFormState>>;
-  submitText: string;
-  onClose: () => void;
-  onSubmit: () => void;
-}) {
-  return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={onClose}>
-      <Pressable style={styles.modalOverlay} onPress={onClose}>
-        <Pressable style={styles.formModalCard}>
-          <Text style={styles.formModalTitle}>{title}</Text>
-
-          <Text style={styles.formLabel}>Event Name</Text>
-          <TextInput
-            style={styles.formInput}
-            value={formState.EventName}
-            onChangeText={(text) => setFormState((prev) => ({ ...prev, EventName: text }))}
-            placeholder="Enter event name"
-            placeholderTextColor="#94a3b8"
-          />
-
-          <Text style={styles.formLabel}>Event Code</Text>
-          <TextInput
-            style={styles.formInput}
-            value={formState.EventCode}
-            onChangeText={(text) => setFormState((prev) => ({ ...prev, EventCode: text }))}
-            placeholder="Enter event code"
-            placeholderTextColor="#94a3b8"
-          />
-
-          <Text style={styles.formLabel}>Description</Text>
-          <TextInput
-            style={[styles.formInput, styles.formTextArea]}
-            value={formState.Description}
-            onChangeText={(text) => setFormState((prev) => ({ ...prev, Description: text }))}
-            placeholder="Enter description"
-            placeholderTextColor="#94a3b8"
-            multiline
-            textAlignVertical="top"
-          />
-
-          <Text style={styles.formLabel}>Status</Text>
-          <View style={styles.statusSelectWrap}>
-            <TouchableOpacity
-              style={[styles.statusOption, formState.status === 'active' && styles.statusOptionActive]}
-              onPress={() => setFormState((prev) => ({ ...prev, status: 'active' }))}
-            >
-              <Text
-                style={[
-                  styles.statusOptionText,
-                  formState.status === 'active' && styles.statusOptionTextActive,
-                ]}
-              >
-                Active
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={[styles.statusOption, formState.status === 'inactive' && styles.statusOptionActive]}
-              onPress={() => setFormState((prev) => ({ ...prev, status: 'inactive' }))}
-            >
-              <Text
-                style={[
-                  styles.statusOptionText,
-                  formState.status === 'inactive' && styles.statusOptionTextActive,
-                ]}
-              >
-                Inactive
-              </Text>
-            </TouchableOpacity>
-          </View>
-
-          <View style={styles.formActions}>
-            <TouchableOpacity style={styles.cancelBtn} onPress={onClose}>
-              <Text style={styles.cancelBtnText}>Cancel</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.submitBtn} onPress={onSubmit}>
-              <Text style={styles.submitBtnText}>{submitText}</Text>
-            </TouchableOpacity>
-          </View>
-        </Pressable>
-      </Pressable>
-    </Modal>
-  );
-}
-
-const styles = StyleSheet.create({
+/* ─── Stylesheet Matching Web Design (Images 1, 2, 3, 4) ─── */
+const s = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#f3f4f6',
+    backgroundColor: '#f8fafc',
   },
-  centerContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 20,
+  headerBar: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 44 : 28,
+    paddingBottom: 10,
   },
-  loadingText: {
-    marginTop: 10,
-    color: '#64748b',
-    fontSize: 13,
-  },
-  emptyText: {
-    fontSize: 15,
-    color: '#94a3b8',
-    marginVertical: 30,
-  },
-  listContainer: {
-    paddingHorizontal: 12,
-    paddingBottom: 20,
-  },
-  headerWrap: {
-    marginTop: 10,
-    marginBottom: 10,
-  },
-  headerTopRow: {
+  headerBreadcrumbRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 10,
-    marginBottom: 10,
+    alignItems: 'center',
+    gap: 6,
   },
-  titleGroup: {
+  headerAppLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 0.8,
+  },
+  headerBreadcrumbSlash: {
+    fontSize: 12,
+    color: '#cbd5e1',
+  },
+  headerGreeting: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#1e293b',
     flex: 1,
   },
-  headerTitle: {
-    fontSize: 24,
+  headerRoleBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  headerRoleBadgePersonnel: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  headerRoleBadgeAuditor: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  headerRoleBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+  },
+  headerRoleBadgeTextPersonnel: {
+    color: '#475569',
+  },
+  headerRoleBadgeTextAuditor: {
+    color: '#1d4ed8',
+  },
+
+  mainScrollContent: {
+    padding: 16,
+    paddingBottom: 40,
+  },
+
+  /* Title Banner */
+  titleBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  titleIconBox: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  bannerTitle: {
+    fontSize: 18,
     fontWeight: '800',
     color: '#0f172a',
+    letterSpacing: -0.3,
   },
-  headerSubtitle: {
-    marginTop: 4,
+  bannerSubtitle: {
+    fontSize: 12,
     color: '#64748b',
-    fontSize: 12,
+    marginTop: 2,
+    lineHeight: 16,
   },
-  headerActions: {
-    flexDirection: 'row',
-    gap: 8,
-  },
-  deleteBtn: {
-    backgroundColor: '#fee2e2',
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  deleteBtnActive: {
-    backgroundColor: '#fecaca',
-  },
-  deleteBtnText: {
-    color: '#dc2626',
-    fontWeight: '700',
-    fontSize: 12,
-  },
-  addBtn: {
-    backgroundColor: '#059669',
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  addBtnText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 12,
-  },
+
+  /* Search & Controls Row (Image 1 & 4) */
   controlsRow: {
     flexDirection: 'row',
     gap: 8,
+    marginBottom: 14,
     alignItems: 'center',
+  },
+  searchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: Platform.OS === 'ios' ? 8 : 4,
   },
   searchInput: {
     flex: 1,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 12,
+    marginLeft: 8,
+    fontSize: 13,
     color: '#0f172a',
   },
-  filterWrap: {
+  statusFilterBtn: {
     flexDirection: 'row',
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    borderRadius: 10,
-    overflow: 'hidden',
-    backgroundColor: '#fff',
-  },
-  filterBtn: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-  },
-  filterBtnActive: {
-    backgroundColor: '#2563eb',
-  },
-  filterBtnText: {
-    color: '#334155',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  filterBtnTextActive: {
-    color: '#fff',
-  },
-  bulkDeleteBar: {
-    marginTop: 10,
-    backgroundColor: '#fff1f2',
-    borderWidth: 1,
-    borderColor: '#fecdd3',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 9,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-  },
-  bulkDeleteText: {
-    color: '#be123c',
-    fontWeight: '600',
-    fontSize: 12,
-  },
-  bulkDeleteBtn: {
-    backgroundColor: '#dc2626',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-  },
-  bulkDeleteBtnDisabled: {
-    opacity: 0.5,
-  },
-  bulkDeleteBtnText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 11,
-  },
-  cardWrap: {
-    width: '100%',
-    marginBottom: 12,
-    position: 'relative',
-  },
-  eventCard: {
-    minHeight: 170,
-    borderRadius: 16,
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    backgroundColor: '#fff',
-    padding: 12,
-    overflow: 'hidden',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 7,
-    elevation: 3,
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    gap: 4,
   },
-  cardBubble: {
-    position: 'absolute',
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: '#cffafe',
-    right: -22,
-    top: -20,
+  statusFilterText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#1e293b',
   },
-  checkbox: {
-    position: 'absolute',
-    left: 8,
-    top: 10,
-    width: 18,
-    height: 18,
+  statusDropdownMenu: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: '#ef4444',
-    borderRadius: 5,
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 3,
+    borderColor: '#e2e8f0',
+    marginTop: -8,
+    marginBottom: 14,
+    padding: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 6,
   },
-  checkboxActive: {
-    backgroundColor: '#ef4444',
+  statusDropdownItem: {
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    borderRadius: 8,
   },
-  checkboxText: {
-    color: '#fff',
-    fontSize: 11,
+  statusDropdownItemActive: {
+    backgroundColor: '#eff6ff',
+  },
+  statusDropdownItemText: {
+    fontSize: 13,
+    color: '#475569',
+    fontWeight: '600',
+  },
+  statusDropdownItemTextActive: {
+    color: '#2563eb',
     fontWeight: '700',
-    lineHeight: 13,
   },
-  cardHeaderRow: {
+
+  /* Accreditation Card (Matching Image 1 & EventCard.jsx) */
+  eventCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 18,
+    marginBottom: 14,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 8,
+    elevation: 2,
+  },
+  eventCardPillsRow: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'flex-start',
-    gap: 6,
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginBottom: 10,
   },
-  cardLabel: {
-    fontSize: 9,
+  eventCodeBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  eventCodeBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#1d4ed8',
+    textTransform: 'uppercase',
+  },
+  eventLevelBadge: {
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#c7d2fe',
+    borderRadius: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  eventLevelBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#4338ca',
+  },
+  activePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  activeDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#059669',
+  },
+  activePillText: {
+    fontSize: 10,
     fontWeight: '700',
-    color: '#0e7490',
-    letterSpacing: 1,
+    color: '#059669',
   },
-  cardTitle: {
-    marginTop: 4,
-    fontSize: 20,
+  inactivePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  inactiveDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#94a3b8',
+  },
+  inactivePillText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+  },
+  eventNameTitle: {
+    fontSize: 16,
     fontWeight: '800',
     color: '#0f172a',
     lineHeight: 22,
-  },
-  dotButton: {
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    width: 30,
-    height: 30,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  dotText: {
-    fontSize: 16,
-    lineHeight: 16,
-    color: '#475569',
-  },
-  cardCodeWrap: {
-    marginTop: 12,
-  },
-  cardCode: {
-    alignSelf: 'flex-start',
-    backgroundColor: '#e0e7ff',
-    color: '#4338ca',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 999,
-    fontSize: 10,
-    fontWeight: '700',
-    maxWidth: '100%',
-  },
-  cardFooter: {
-    marginTop: 'auto',
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    paddingTop: 10,
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-  },
-  cardFooterLeft: {
-    color: '#334155',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  cardFooterRight: {
-    color: '#94a3b8',
-    fontSize: 11,
-    fontWeight: '600',
-  },
-  optionsMenu: {
-    position: 'absolute',
-    top: 44,
-    right: 8,
-    zIndex: 15,
-    width: 120,
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 8,
-  },
-  optionsItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  optionsText: {
-    color: '#334155',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  optionsDeleteText: {
-    color: '#dc2626',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(2, 6, 23, 0.45)',
-    justifyContent: 'center',
-    alignItems: 'center',
-    paddingHorizontal: 14,
-    zIndex: 99999,
-    elevation: 99999,
-  },
-  formModalCard: {
-    width: '100%',
-    maxWidth: 420,
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 16,
-    zIndex: 100000,
-    elevation: 100000,
-  },
-  formModalTitle: {
-    fontSize: 22,
-    fontWeight: '800',
-    color: '#0f172a',
     marginBottom: 12,
   },
-  formLabel: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '700',
-    marginTop: 4,
-    marginBottom: 6,
-  },
-  formInput: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
+  assignedAreasRow: {
+    backgroundColor: '#f8fafc',
     borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    fontSize: 13,
-    color: '#0f172a',
-    backgroundColor: '#fff',
-  },
-  formTextArea: {
-    height: 80,
-  },
-  statusSelectWrap: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 2,
-  },
-  statusOption: {
-    flex: 1,
     borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingVertical: 9,
+    borderColor: '#e2e8f0',
+    padding: 10,
+    marginBottom: 12,
+  },
+  assignedAreasLabel: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+  },
+  assignedAreaChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  assignedAreaChipText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  cardDatesRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    marginBottom: 12,
+  },
+  cardDateItem: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  statusOptionActive: {
-    backgroundColor: '#dbeafe',
-    borderColor: '#93c5fd',
+  cardDateLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94a3b8',
+    letterSpacing: 0.5,
   },
-  statusOptionText: {
-    color: '#334155',
-    fontSize: 12,
+  cardDateValue: {
+    fontSize: 11,
     fontWeight: '600',
+    color: '#334155',
+    marginTop: 1,
   },
-  statusOptionTextActive: {
-    color: '#1e40af',
-  },
-  formActions: {
-    marginTop: 14,
+  cardActionFooter: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
-    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingTop: 8,
   },
-  cancelBtn: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 8,
-  },
-  cancelBtnText: {
-    color: '#334155',
-    fontSize: 12,
+  evidenceTreeLabel: {
+    fontSize: 11,
     fontWeight: '600',
+    color: '#64748b',
   },
-  submitBtn: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 8,
+  openStructureBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 2,
   },
-  submitBtnText: {
-    color: '#fff',
+  openStructureBtnText: {
     fontSize: 12,
     fontWeight: '700',
+    color: '#2563eb',
   },
-  structureModalCard: {
-    width: '100%',
-    maxWidth: 520,
-    height: '86%',
-    minHeight: 420,
-    maxHeight: '90%',
-    backgroundColor: '#fff',
-    borderRadius: 14,
-    padding: 14,
+
+  /* ─── Structure Workspace Modal (Image 2 & 3) ─── */
+  structureContainer: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
   },
   structureHeader: {
     flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 10,
+    alignItems: 'flex-start',
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 52 : 36,
+    paddingBottom: 14,
   },
-  structureHeaderActions: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  structureDotsBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
+  structureHeaderIconBox: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: '#eff6ff',
     borderWidth: 1,
-    borderColor: '#d1d5db',
+    borderColor: '#bfdbfe',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
   },
-  structureDotsText: {
-    color: '#334155',
-    fontSize: 16,
-    lineHeight: 16,
-    fontWeight: '700',
+  structureHeaderTitle: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#0f172a',
   },
-  structureActionMenu: {
-    position: 'absolute',
-    top: 58,
-    right: 14,
-    zIndex: 50,
-    minWidth: 170,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    backgroundColor: '#fff',
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.15,
-    shadowRadius: 8,
-    elevation: 9,
+  structureHeaderSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
   },
-  structureActionItem: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-  },
-  structureActionItemText: {
-    color: '#334155',
-    fontSize: 13,
-    fontWeight: '500',
-  },
-  structureActionDeleteText: {
-    color: '#dc2626',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  structureDeleteBar: {
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#fecaca',
-    backgroundColor: '#fff1f2',
-    borderRadius: 10,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
+  structureHeaderTagsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  structureDeleteText: {
-    color: '#be123c',
-    fontSize: 12,
-    fontWeight: '600',
-    flex: 1,
-  },
-  structureDeleteActions: {
-    flexDirection: 'row',
+    flexWrap: 'wrap',
     gap: 6,
+    marginTop: 6,
+  },
+  structureMetaBadge: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  structureMetaBadgeText: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  structureCloseBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 8,
+    backgroundColor: '#f1f5f9',
+    alignItems: 'center',
+    justifyContent: 'center',
     marginLeft: 8,
   },
-  structureDeleteCancelBtn: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 9,
-    paddingVertical: 6,
-    backgroundColor: '#fff',
-  },
-  structureDeleteCancelText: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '600',
-  },
-  structureDeleteConfirmBtn: {
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    backgroundColor: '#dc2626',
-  },
-  structureDeleteConfirmText: {
-    color: '#fff',
-    fontSize: 12,
-    fontWeight: '700',
-  },
-  structureTitle: {
-    fontSize: 24,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  structureCode: {
-    marginTop: 2,
-    color: '#64748b',
-    fontSize: 12,
-  },
-  closeModalBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 9,
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  closeModalBtnText: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '800',
-  },
-  structureSearch: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    paddingHorizontal: 11,
-    paddingVertical: 9,
-    fontSize: 12,
-    color: '#0f172a',
-    marginBottom: 12,
-  },
-  structureLoadingWrap: {
+
+  structureTabsBar: {
     flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 20,
-  },
-  structureScroll: {
-    flex: 1,
-    minHeight: 200,
-  },
-  structureScrollContent: {
-    paddingBottom: 12,
-  },
-  structureEmptyWrap: {
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  structureEmptyText: {
-    color: '#64748b',
-    fontSize: 13,
-    textAlign: 'center',
-  },
-  structureAreaCard: {
-    borderRadius: 12,
-    marginBottom: 12,
-    overflow: 'hidden',
     backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    gap: 12,
   },
-  structureAreaHeader: {
-    backgroundColor: '#8f3de8',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 10,
+  structureTabBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
+    gap: 6,
+    paddingVertical: 12,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
   },
-  structureAreaTitle: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 15,
+  structureTabBtnActive: {
+    borderBottomColor: '#2563eb',
   },
-  structureExpandTap: {
-    flex: 1,
-  },
-  structureRowInline: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    flex: 1,
-  },
-  structureEditBtn: {
-    width: 34,
-    height: 28,
-    borderRadius: 6,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1,
-  },
-  structureEditBtnLight: {
-    backgroundColor: 'rgba(255,255,255,0.14)',
-    borderColor: 'rgba(255,255,255,0.22)',
-  },
-  structureEditBtnSoft: {
-    backgroundColor: '#e2e8f0',
-    borderColor: '#cbd5e1',
-  },
-  structureEditIcon: {
-    color: '#1e293b',
-    fontSize: 14,
-    fontWeight: '700',
-    lineHeight: 14,
-  },
-  structureEditIconLight: {
-    color: '#f8fafc',
-  },
-  structureCheckbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#e11d48',
-    backgroundColor: '#fff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  structureCheckboxActive: {
-    backgroundColor: '#e11d48',
-  },
-  structureCheckboxText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  criteriaWrap: {
-    marginTop: 10,
-    marginLeft: 18,
-    paddingLeft: 16,
-    borderLeftWidth: 3,
-    borderLeftColor: '#c9a6f9',
-  },
-  criteriaHeader: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: '#5b63de',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  criteriaTitle: {
-    color: '#fff',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  requirementsWrap: {
-    marginTop: 10,
-    marginLeft: 14,
-    borderLeftWidth: 3,
-    borderLeftColor: '#5c9cf2',
-    paddingLeft: 10,
-    gap: 8,
-  },
-  requirementItem: {
-    backgroundColor: '#c2d0e5',
-    borderRadius: 8,
-    padding: 9,
-  },
-  requirementCode: {
-    color: '#1e293b',
-    fontWeight: '700',
-    fontSize: 12,
-    marginBottom: 3,
-  },
-  requirementText: {
-    color: '#334155',
-    fontSize: 12,
-  },
-  noItemsText: {
-    color: '#94a3b8',
-    fontSize: 12,
-    marginTop: 5,
-  },
-  noAreaTitle: {
-    backgroundColor: '#8f3de8',
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderRadius: 10,
-  },
-  noAreaTitleText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 14,
-  },
-  noAreaCriteriaItem: {
-    marginTop: 10,
-    marginLeft: 18,
-    paddingLeft: 16,
-    borderLeftWidth: 3,
-    borderLeftColor: '#c9a6f9',
-  },
-  noAreaCriteriaText: {
-    color: '#fff',
+  structureTabBtnText: {
     fontSize: 13,
-    fontWeight: '700',
+    fontWeight: '600',
+    color: '#64748b',
   },
-  manageModalCard: {
-    width: '100%',
-    maxWidth: 480,
-    backgroundColor: '#fff',
+  structureTabBtnTextActive: {
+    color: '#2563eb',
+    fontWeight: '800',
+  },
+
+  treeSearchRow: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  treeSearchBox: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: Platform.OS === 'ios' ? 6 : 2,
+  },
+  treeSearchInput: {
+    flex: 1,
+    marginLeft: 6,
+    fontSize: 12,
+    color: '#0f172a',
+  },
+  treeExpandToggleRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  treeQuickBtn: {
+    paddingHorizontal: 8,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  treeQuickBtnText: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+
+  /* Area Bar (Matching Image 2 & 3: Solid Royal Blue) */
+  areaBlock: {
+    marginBottom: 12,
+  },
+  areaHeaderBar: {
+    backgroundColor: '#2563eb',
     borderRadius: 14,
     padding: 14,
-    overflow: 'visible',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 6,
+    elevation: 3,
   },
-  manageHeaderRow: {
+  areaBarTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  assignedToYouPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#059669',
+    borderRadius: 12,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  assignedToYouPillText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  personnelAvatarPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  avatarCircleSmall: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#ffffff',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarCircleImg: {
+    width: '100%',
+    height: '100%',
+  },
+  avatarCircleSmallText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#2563eb',
+  },
+  personnelAvatarPillText: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  childPersonnelPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: 'rgba(251, 191, 36, 0.25)',
+    borderWidth: 1,
+    borderColor: 'rgba(251, 191, 36, 0.4)',
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  avatarCircleAmber: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#f59e0b',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarCircleAmberText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  childPersonnelPillText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#fef3c7',
+  },
+  areaDatesRow: {
+    marginTop: 6,
+  },
+  areaDatesText: {
+    fontSize: 10,
+    color: '#bfdbfe',
+  },
+
+  /* Children Tree Connector */
+  areaChildrenWrap: {
+    position: 'relative',
+    marginTop: 8,
+    paddingLeft: 16,
+  },
+  treeVerticalLine: {
+    position: 'absolute',
+    left: 8,
+    top: 0,
+    bottom: 12,
+    width: 2,
+    backgroundColor: '#3b82f6',
+  },
+  areaChildrenInner: {
+    paddingLeft: 4,
+  },
+  noSubItemsCard: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    padding: 12,
+    alignItems: 'center',
+    marginBottom: 6,
+  },
+  noSubItemsText: {
+    fontSize: 11,
+    color: '#94a3b8',
+    fontStyle: 'italic',
+  },
+
+  /* Criteria Block & Bar (Image 3) */
+  criteriaBlock: {
+    position: 'relative',
+    marginBottom: 10,
+  },
+  treeHorizontalBranch: {
+    position: 'absolute',
+    left: -12,
+    top: 20,
+    width: 12,
+    height: 2,
+    backgroundColor: '#3b82f6',
+  },
+  criteriaHeaderBar: {
+    backgroundColor: '#3b82f6',
+    borderRadius: 12,
+    padding: 12,
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    shadowColor: '#3b82f6',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  criteriaBarTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  criteriaDatesText: {
+    fontSize: 9,
+    color: '#dbeafe',
+    marginTop: 4,
+  },
+
+  critChildrenWrap: {
+    position: 'relative',
+    marginTop: 6,
+    paddingLeft: 16,
+  },
+  critVerticalLine: {
+    position: 'absolute',
+    left: 8,
+    top: 0,
+    bottom: 8,
+    width: 2,
+    backgroundColor: '#93c5fd',
+  },
+  critChildrenInner: {
+    paddingLeft: 4,
+  },
+  critHorizontalBranch: {
+    position: 'absolute',
+    left: -12,
+    top: 24,
+    width: 12,
+    height: 2,
+    backgroundColor: '#93c5fd',
+  },
+
+  /* Requirement Standard Card (Image 3) */
+  reqCardContainer: {
+    position: 'relative',
+    marginBottom: 8,
+  },
+  requirementCard: {
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 12,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  reqTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginBottom: 6,
+  },
+  reqCodePill: {
+    backgroundColor: '#1e293b',
+    borderRadius: 6,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  reqCodePillText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  assignedToYouPillGreen: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 12,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+  },
+  assignedToYouPillGreenText: {
+    fontSize: 9,
+    fontWeight: '800',
+    color: '#059669',
+  },
+  reqAssigneePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 12,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  avatarCircleReq: {
+    width: 14,
+    height: 14,
+    borderRadius: 7,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+    overflow: 'hidden',
+  },
+  avatarCircleReqText: {
+    fontSize: 8,
+    fontWeight: '800',
+    color: '#ffffff',
+  },
+  reqAssigneePillText: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#1e293b',
+  },
+  requirementDesc: {
+    fontSize: 12,
+    color: '#1e293b',
+    lineHeight: 17,
+  },
+  reqDatesText: {
+    fontSize: 9,
+    color: '#64748b',
+    marginTop: 6,
+  },
+  reqActionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 10,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#dbeafe',
   },
-  manageMainTabs: {
+  submissionsBtn: {
     flexDirection: 'row',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    padding: 4,
-    gap: 4,
-    marginBottom: 10,
-  },
-  manageMainTabBtn: {
-    flex: 1,
     alignItems: 'center',
-    justifyContent: 'center',
+    gap: 4,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
     borderRadius: 8,
-    paddingVertical: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
   },
-  manageMainTabBtnActive: {
-    backgroundColor: '#0ea5b7',
+  submissionsBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1d4ed8',
   },
-  manageMainTabText: {
-    color: '#334155',
-    fontSize: 12,
+  evaluateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+  },
+  evaluateBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#059669',
+  },
+
+  /* ─── Programs and Offices View (Image 2 Left Section) ─── */
+  officeSearchRow: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  officeFilterPillsRow: {
+    flexDirection: 'row',
+    gap: 8,
+    marginTop: 8,
+  },
+  officeFilterPill: {
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: 14,
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  officeFilterPillActive: {
+    backgroundColor: '#2563eb',
+    borderColor: '#2563eb',
+  },
+  officeFilterPillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  officeFilterPillTextActive: {
+    color: '#ffffff',
     fontWeight: '700',
   },
-  manageMainTabTextActive: {
-    color: '#fff',
+  programOfficeCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 14,
+    marginBottom: 10,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.04,
+    shadowRadius: 3,
+    elevation: 1,
   },
-  manageTitle: {
-    fontSize: 20,
+  officeIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  programIconBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 10,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  programOfficeName: {
+    fontSize: 14,
     fontWeight: '800',
     color: '#0f172a',
   },
-  manageTabs: {
-    flexDirection: 'row',
-    backgroundColor: '#f1f5f9',
-    borderRadius: 10,
-    padding: 4,
-    gap: 4,
-    marginBottom: 10,
-  },
-  manageTabBtn: {
-    flex: 1,
-    alignItems: 'center',
-    paddingVertical: 8,
-    borderRadius: 8,
-  },
-  manageTabBtnActive: {
-    backgroundColor: '#0891b2',
-  },
-  manageTabText: {
-    color: '#334155',
+  programOfficeDept: {
     fontSize: 11,
-    fontWeight: '600',
-  },
-  manageTabTextActive: {
-    color: '#fff',
-  },
-  manageFormWrap: {
-    gap: 8,
-    zIndex: 99,
-  },
-  dropdownWrap: {
-    position: 'relative',
-    zIndex: 99,
-  },
-  dropdownWrapOpen: {
-    zIndex: 999,
-    elevation: 999,
-  },
-  dropdownTrigger: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 10,
-    minHeight: 42,
-    paddingHorizontal: 10,
-    backgroundColor: '#fff',
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  dropdownTriggerText: {
-    color: '#0f172a',
-    fontSize: 13,
-    fontWeight: '500',
-    flex: 1,
-  },
-  dropdownArrow: {
     color: '#64748b',
-    fontSize: 12,
-    fontWeight: '700',
+    marginTop: 2,
   },
-  dropdownMenuList: {
-    position: 'absolute',
-    left: 0,
-    right: 0,
-    top: 46,
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 10,
-    backgroundColor: '#fff',
-    maxHeight: 180,
-    zIndex: 999,
-    elevation: 999,
+  programOfficeMetaDates: {
+    marginTop: 6,
   },
-  dropdownMenuItem: {
-    paddingHorizontal: 10,
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: '#f1f5f9',
-  },
-  dropdownMenuItemText: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  dropdownMenuEmptyText: {
+  programOfficeDatesText: {
+    fontSize: 9,
     color: '#94a3b8',
-    fontSize: 12,
-    fontWeight: '500',
-  },
-  assignWrap: {
-    gap: 10,
-  },
-  assignHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    gap: 10,
-  },
-  assignTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#334155',
-  },
-  assignHint: {
-    fontSize: 11,
-    color: '#64748b',
-    flex: 1,
-    textAlign: 'right',
-  },
-  assignColumns: {
-    flexDirection: 'row',
-    gap: 10,
-  },
-  assignPanel: {
-    width: '33%',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    padding: 10,
-    backgroundColor: '#fff',
-  },
-  assignPanelLarge: {
-    width: '64%',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    borderRadius: 10,
-    padding: 10,
-    backgroundColor: '#fff',
-  },
-  assignPanelHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    marginBottom: 6,
-  },
-  assignPanelTitle: {
-    color: '#334155',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  assignSelectAllText: {
-    color: '#64748b',
-    fontSize: 12,
     fontWeight: '600',
   },
-  assignSearchInput: {
-    borderWidth: 1,
-    borderColor: '#d1d5db',
-    borderRadius: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    fontSize: 12,
-    color: '#0f172a',
-    marginBottom: 8,
-  },
-  assignList: {
-    maxHeight: 290,
-  },
-  assignItemRow: {
+  programOfficeBadgesRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 8,
-    borderRadius: 8,
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 8,
+  },
+  nonAcademicBadge: {
+    backgroundColor: '#ecfdf5',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    marginBottom: 6,
-    backgroundColor: '#fff',
+    borderColor: '#a7f3d0',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
   },
-  assignItemRowActive: {
-    backgroundColor: '#ecfeff',
-    borderColor: '#67e8f9',
+  nonAcademicBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#059669',
   },
-  assignItemText: {
-    color: '#334155',
-    fontSize: 12,
-    fontWeight: '500',
-    flex: 1,
-  },
-  assignCheckbox: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
+  academicBadge: {
+    backgroundColor: '#eff6ff',
     borderWidth: 1,
-    borderColor: '#94a3b8',
+    borderColor: '#bfdbfe',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  academicBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  levelBadge: {
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 6,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  levelBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  instWideLabel: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94a3b8',
+    letterSpacing: 0.5,
+    marginLeft: 'auto',
+  },
+
+  /* Badges & Empty States */
+  statusBadge: {
+    width: 90,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    backgroundColor: '#fff',
-  },
-  assignCheckboxActive: {
-    backgroundColor: '#0ea5b7',
-    borderColor: '#0ea5b7',
-  },
-  assignCheckboxText: {
-    color: '#fff',
-    fontSize: 11,
-    fontWeight: '700',
-    lineHeight: 12,
-  },
-  assignAreaBlock: {
+    paddingHorizontal: 4,
+    paddingVertical: 3,
+    borderRadius: 9999,
     borderWidth: 1,
-    borderColor: '#e9d5ff',
-    borderRadius: 10,
-    marginBottom: 8,
-    overflow: 'hidden',
+    gap: 4,
   },
-  assignAreaHeader: {
-    flexDirection: 'row',
+  statusDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  statusBadgeText: {
+    fontSize: 9.5,
+    fontWeight: '700',
+    textAlign: 'center',
+  },
+  loadingBox: {
+    padding: 40,
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 10,
-    paddingVertical: 8,
-    backgroundColor: '#8b5cf6',
+    justifyContent: 'center',
   },
-  assignAreaHeaderText: {
-    color: '#fff',
+  loadingText: {
     fontSize: 13,
-    fontWeight: '700',
-    flex: 1,
+    color: '#64748b',
+    marginTop: 10,
   },
-  assignCriteriaBlock: {
-    margin: 8,
+  emptyCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     borderWidth: 1,
-    borderColor: '#c7d2fe',
-    borderRadius: 8,
-    overflow: 'hidden',
-    backgroundColor: '#f8fafc',
-  },
-  assignCriteriaHeader: {
-    flexDirection: 'row',
+    borderColor: '#e2e8f0',
+    padding: 30,
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    backgroundColor: '#4f46e5',
+    marginTop: 20,
   },
-  assignCriteriaHeaderText: {
-    color: '#fff',
-    fontSize: 12,
+  emptyTitle: {
+    fontSize: 16,
     fontWeight: '700',
-    flex: 1,
+    color: '#0f172a',
+    marginTop: 10,
   },
-  assignReqRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 7,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    backgroundColor: '#fff',
-  },
-  assignReqText: {
-    color: '#334155',
-    fontSize: 11,
-    fontWeight: '500',
-    flex: 1,
-  },
-  assignFooter: {
+  emptySubtitle: {
+    fontSize: 12,
+    color: '#64748b',
+    textAlign: 'center',
     marginTop: 4,
-    borderTopWidth: 1,
-    borderTopColor: '#e2e8f0',
-    paddingTop: 10,
+    lineHeight: 18,
+  },
+
+  /* Modal Styles */
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 16,
+  },
+  modalCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 18,
+    padding: 20,
+    width: '100%',
+    maxWidth: 420,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 5,
+  },
+  modalHeaderRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginBottom: 14,
+  },
+  modalTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#0f172a',
+  },
+  modalSub: {
+    fontSize: 12,
+    color: '#2563eb',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  modalSectionLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748b',
+    textTransform: 'uppercase',
+    marginBottom: 8,
+  },
+  statusOptionRow: {
+    flexDirection: 'row',
+    gap: 6,
+  },
+  statusOptionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 4,
+    borderRadius: 10,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+  },
+  statusOptionBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+    marginLeft: 4,
+  },
+  modalCommentsInput: {
+    backgroundColor: '#f8fafc',
+    borderRadius: 10,
+    padding: 10,
+    color: '#0f172a',
+    fontSize: 12,
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    textAlignVertical: 'top',
+    height: 80,
+  },
+  modalActionsRow: {
+    flexDirection: 'row',
+    justifyContent: 'flex-end',
+    alignItems: 'center',
+    marginTop: 18,
     gap: 10,
   },
-  assignFooterText: {
+  modalCancelBtn: {
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  modalCancelBtnText: {
+    fontSize: 13,
     color: '#64748b',
-    fontSize: 12,
-    flex: 1,
+    fontWeight: '600',
+  },
+  modalSaveBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  modalSaveBtnText: {
+    fontSize: 13,
+    color: '#ffffff',
+    fontWeight: '700',
+    marginLeft: 5,
+  },
+  statBadgeApproved: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#a7f3d0',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  statDotApproved: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#059669',
+  },
+  statBadgeTextApproved: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#059669',
+  },
+  statBadgePending: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  statDotPending: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#d97706',
+  },
+  statBadgeTextPending: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#d97706',
+  },
+  statBadgeRejected: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  statDotRejected: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+    backgroundColor: '#dc2626',
+  },
+  statBadgeTextRejected: {
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#dc2626',
+  },
+  statBadgeEmpty: {
+    backgroundColor: '#f1f5f9',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+  },
+  statBadgeTextEmpty: {
+    fontSize: 9,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  submissionFilterWrap: {
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    paddingVertical: 8,
+  },
+  submissionFilterScroll: {
+    paddingHorizontal: 14,
+    gap: 6,
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  submissionFilterChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 20,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+  },
+  submissionFilterChipActiveAll: {
+    backgroundColor: '#eff6ff',
+    borderColor: '#93c5fd',
+  },
+  submissionFilterChipActiveRejected: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fca5a5',
+  },
+  submissionFilterChipActivePending: {
+    backgroundColor: '#fffbeb',
+    borderColor: '#fcd34d',
+  },
+  submissionFilterChipActiveUnsubmitted: {
+    backgroundColor: '#f1f5f9',
+    borderColor: '#cbd5e1',
+  },
+  submissionFilterChipActiveApproved: {
+    backgroundColor: '#ecfdf5',
+    borderColor: '#6ee7b7',
+  },
+  submissionFilterChipActivePriority: {
+    backgroundColor: '#eef2ff',
+    borderColor: '#c7d2fe',
+  },
+  submissionFilterChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  submissionFilterChipTextActiveAll: {
+    color: '#2563eb',
+    fontWeight: '700',
+  },
+  submissionFilterChipTextActiveRejected: {
+    color: '#dc2626',
+    fontWeight: '700',
+  },
+  submissionFilterChipTextActivePending: {
+    color: '#d97706',
+    fontWeight: '700',
+  },
+  submissionFilterChipTextActiveUnsubmitted: {
+    color: '#475569',
+    fontWeight: '700',
+  },
+  submissionFilterChipTextActiveApproved: {
+    color: '#059669',
+    fontWeight: '700',
+  },
+  submissionFilterChipTextActivePriority: {
+    color: '#4f46e5',
+    fontWeight: '700',
+  },
+  submissionDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
 });

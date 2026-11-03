@@ -1,4 +1,5 @@
 import { Image } from 'expo-image';
+import SmartUserAvatar from './SmartUserAvatar';
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   ActivityIndicator,
@@ -92,21 +93,14 @@ export default function EvidenceSubmissionModal({
     void getAuthHeaders().then(setAuthHeaders);
   }, [visible]);
 
+  const uploadedUserIdsKey = uploadedUserIds.join(',');
+
   useEffect(() => {
     if (!visible || !requirementId || uploadedUserIds.length === 0) {
-      setFileByUserId({});
-      setLoadingByUserId({});
       return;
     }
 
     let cancelled = false;
-    const nextLoading = uploadedUserIds.reduce<Record<number, boolean>>((acc, id) => {
-      acc[id] = true;
-      return acc;
-    }, {});
-    setLoadingByUserId(nextLoading);
-    setFileByUserId({});
-
     const fetchFiles = async () => {
       await Promise.all(
         uploadedUserIds.map(async (userId) => {
@@ -141,7 +135,7 @@ export default function EvidenceSubmissionModal({
     return () => {
       cancelled = true;
     };
-  }, [visible, requirementId, uploadedUserIds.join(','), normalizeUrl]);
+  }, [visible, requirementId, uploadedUserIdsKey, normalizeUrl, uploadedUserIds]);
 
   const workUser = mode === 'work' ? users[0] : null;
   const workUserId = workUser ? Number(workUser?.UserID || workUser?.user_id || workUser?.id) : null;
@@ -251,13 +245,13 @@ export default function EvidenceSubmissionModal({
           >
             <View style={styles.adminUserTop}>
               <View style={styles.adminAvatarWrap}>
-                {profileUrl ? (
-                  <Image source={{ uri: profileUrl }} style={styles.adminAvatar} contentFit="cover" />
-                ) : (
-                  <View style={styles.adminAvatarFallback}>
-                    <Text style={styles.adminAvatarFallbackText}>{displayName.slice(0, 1).toUpperCase()}</Text>
-                  </View>
-                )}
+                <SmartUserAvatar
+                  user={user}
+                  src={profileUrl}
+                  fullName={displayName}
+                  size={26}
+                  textSize={10}
+                />
                 {uploaded && <View style={styles.adminAvatarCheck}><Text style={styles.adminAvatarCheckText}>✓</Text></View>}
               </View>
               <Text style={styles.adminUserName} numberOfLines={1}>{displayName}</Text>
