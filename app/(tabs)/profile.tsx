@@ -9,6 +9,7 @@ import {
   Image,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -1007,6 +1008,7 @@ export default function ProgramsAndOfficesScreen() {
               <TouchableOpacity
                 style={[s.viewModeBtn, viewMode === 'grid' && s.viewModeBtnActive]}
                 onPress={() => setViewMode('grid')}
+                activeOpacity={0.8}
               >
                 <MaterialIcons
                   name="grid-view"
@@ -1017,6 +1019,7 @@ export default function ProgramsAndOfficesScreen() {
               <TouchableOpacity
                 style={[s.viewModeBtn, viewMode === 'list' && s.viewModeBtnActive]}
                 onPress={() => setViewMode('list')}
+                activeOpacity={0.8}
               >
                 <MaterialIcons
                   name="view-list"
@@ -1026,113 +1029,20 @@ export default function ProgramsAndOfficesScreen() {
               </TouchableOpacity>
             </View>
           </ScrollView>
-
-          {/* Office Type Dropdown Popover (Screenshot 4) */}
-          {showOfficeTypeDropdown && (
-            <View style={s.popoverMenu}>
-              {[
-                { label: 'All Office Types', value: '' },
-                { label: 'Academic', value: 'academic' },
-                { label: 'Non Academic', value: 'non_academic' },
-              ].map((opt) => (
-                <TouchableOpacity
-                  key={opt.label}
-                  style={[s.popoverItem, officeTypeFilter === opt.value && s.popoverItemActive]}
-                  onPress={() => {
-                    setOfficeTypeFilter(opt.value as any);
-                    setShowOfficeTypeDropdown(false);
-                  }}
-                >
-                  <Text
-                    style={[
-                      s.popoverItemText,
-                      officeTypeFilter === opt.value && s.popoverItemTextActive,
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
-
-          {/* Department Dropdown Popover (Screenshot 3) */}
-          {showDepartmentDropdown && (
-            <View style={s.popoverMenu}>
-              <TouchableOpacity
-                style={[s.popoverItem, !selectedDepartmentId && s.popoverItemActive]}
-                onPress={() => {
-                  setSelectedDepartmentId('');
-                  setShowDepartmentDropdown(false);
-                }}
-              >
-                <Text style={[s.popoverItemText, !selectedDepartmentId && s.popoverItemTextActive]}>
-                  All Departments
-                </Text>
-              </TouchableOpacity>
-              {departments.map((dept) => {
-                const dId = String(dept.id || dept.DepartmentID || '');
-                const dName = dept.name || dept.DepartmentName || '';
-                return (
-                  <TouchableOpacity
-                    key={`dept-opt-${dId}`}
-                    style={[s.popoverItem, selectedDepartmentId === dId && s.popoverItemActive]}
-                    onPress={() => {
-                      setSelectedDepartmentId(dId);
-                      setShowDepartmentDropdown(false);
-                    }}
-                  >
-                    <Text
-                      style={[
-                        s.popoverItemText,
-                        selectedDepartmentId === dId && s.popoverItemTextActive,
-                      ]}
-                    >
-                      {dName}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          )}
-
-          {/* Compliance Status Dropdown Popover (Screenshot 2) */}
-          {showStatusDropdown && (
-            <View style={s.popoverMenu}>
-              {[
-                { label: 'All Offices', value: 'all', dot: '#94a3b8' },
-                { label: 'Complied', value: 'compiled', dot: '#059669' },
-                { label: 'Partially Complied', value: 'partially', dot: '#d97706' },
-                { label: 'Not Complied', value: 'not_compiled', dot: '#dc2626' },
-              ].map((opt) => (
-                <TouchableOpacity
-                  key={opt.label}
-                  style={[s.popoverItem, statusFilter === opt.value && s.popoverItemActive]}
-                  onPress={() => {
-                    setStatusFilter(opt.value as any);
-                    setShowStatusDropdown(false);
-                  }}
-                >
-                  <View style={[s.statusDotSmall, { backgroundColor: opt.dot }]} />
-                  <Text
-                    style={[
-                      s.popoverItemText,
-                      statusFilter === opt.value && s.popoverItemTextActive,
-                    ]}
-                  >
-                    {opt.label}
-                  </Text>
-                </TouchableOpacity>
-              ))}
-            </View>
-          )}
         </View>
 
         {/* ─── Active Accreditation Selector / Tab Bar (Screenshot 1: PACUCOA 2027) ─── */}
         <View style={s.eventSelectorRow}>
           <TouchableOpacity
             style={s.activeEventTab}
-            onPress={() => setShowEventPicker((p) => !p)}
+            onPress={() => {
+              if (events.length > 1) {
+                setShowEventPicker((p) => !p);
+                setShowOfficeTypeDropdown(false);
+                setShowDepartmentDropdown(false);
+                setShowStatusDropdown(false);
+              }
+            }}
             activeOpacity={0.8}
           >
             <View style={s.eventActiveDot} />
@@ -1170,36 +1080,196 @@ export default function ProgramsAndOfficesScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Active Events Selection Dropdown */}
-        {showEventPicker && events.length > 1 && (
-          <View style={s.activeEventsPickerBox}>
-            <Text style={s.pickerHeaderLabel}>ACTIVE ACCREDITATION FRAMEWORKS</Text>
-            {events.map((ev) => {
-              const evId = String(getEventId(ev));
-              const isCurr = evId === selectedEventId;
-              return (
-                <TouchableOpacity
-                  key={`ev-tab-${evId}`}
-                  style={[s.eventPickerItem, isCurr && s.eventPickerItemActive]}
-                  onPress={() => {
-                    setSelectedEventId(evId);
-                    setShowEventPicker(false);
-                  }}
-                >
-                  <MaterialIcons
-                    name="fact-check"
-                    size={16}
-                    color={isCurr ? '#2563eb' : '#64748b'}
-                  />
-                  <Text style={[s.eventPickerItemText, isCurr && s.eventPickerItemTextActive]}>
-                    {ev.eventcode || ev.eventname}
-                  </Text>
-                  {isCurr && <MaterialIcons name="check" size={16} color="#2563eb" />}
-                </TouchableOpacity>
-              );
-            })}
-          </View>
-        )}
+        {/* ─── Floating Dropdown Popover Modal (Never pushes content down) ─── */}
+        <Modal
+          visible={
+            showOfficeTypeDropdown ||
+            showDepartmentDropdown ||
+            showStatusDropdown ||
+            (showEventPicker && events.length > 1)
+          }
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            setShowOfficeTypeDropdown(false);
+            setShowDepartmentDropdown(false);
+            setShowStatusDropdown(false);
+            setShowEventPicker(false);
+          }}
+        >
+          <Pressable
+            style={s.floatingDropdownBackdrop}
+            onPress={() => {
+              setShowOfficeTypeDropdown(false);
+              setShowDepartmentDropdown(false);
+              setShowStatusDropdown(false);
+              setShowEventPicker(false);
+            }}
+          >
+            <Pressable style={s.floatingDropdownCard} onPress={(e) => e.stopPropagation()}>
+              {/* Office Type Dropdown Popover */}
+              {showOfficeTypeDropdown && (
+                <View>
+                  <Text style={s.floatingDropdownHeader}>FILTER BY OFFICE TYPE</Text>
+                  {[
+                    { label: 'All Office Types', value: '' },
+                    { label: 'Academic', value: 'academic' },
+                    { label: 'Non Academic', value: 'non_academic' },
+                  ].map((opt) => (
+                    <TouchableOpacity
+                      key={opt.label}
+                      style={[
+                        s.popoverItem,
+                        officeTypeFilter === opt.value && s.popoverItemActive,
+                      ]}
+                      onPress={() => {
+                        setOfficeTypeFilter(opt.value as any);
+                        setShowOfficeTypeDropdown(false);
+                      }}
+                    >
+                      <Text
+                        style={[
+                          s.popoverItemText,
+                          officeTypeFilter === opt.value && s.popoverItemTextActive,
+                        ]}
+                      >
+                        {opt.label}
+                      </Text>
+                      {officeTypeFilter === opt.value && (
+                        <MaterialIcons name="check" size={16} color="#2563eb" />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Department Dropdown Popover */}
+              {showDepartmentDropdown && (
+                <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                  <Text style={s.floatingDropdownHeader}>FILTER BY DEPARTMENT</Text>
+                  <TouchableOpacity
+                    style={[s.popoverItem, !selectedDepartmentId && s.popoverItemActive]}
+                    onPress={() => {
+                      setSelectedDepartmentId('');
+                      setShowDepartmentDropdown(false);
+                    }}
+                  >
+                    <Text
+                      style={[
+                        s.popoverItemText,
+                        !selectedDepartmentId && s.popoverItemTextActive,
+                      ]}
+                    >
+                      All Departments
+                    </Text>
+                    {!selectedDepartmentId && (
+                      <MaterialIcons name="check" size={16} color="#2563eb" />
+                    )}
+                  </TouchableOpacity>
+                  {departments.map((dept) => {
+                    const dId = String(dept.id || dept.DepartmentID || '');
+                    const dName = dept.name || dept.DepartmentName || '';
+                    return (
+                      <TouchableOpacity
+                        key={`dept-opt-${dId}`}
+                        style={[
+                          s.popoverItem,
+                          selectedDepartmentId === dId && s.popoverItemActive,
+                        ]}
+                        onPress={() => {
+                          setSelectedDepartmentId(dId);
+                          setShowDepartmentDropdown(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            s.popoverItemText,
+                            selectedDepartmentId === dId && s.popoverItemTextActive,
+                          ]}
+                        >
+                          {dName}
+                        </Text>
+                        {selectedDepartmentId === dId && (
+                          <MaterialIcons name="check" size={16} color="#2563eb" />
+                        )}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+
+              {/* Compliance Status Dropdown Popover */}
+              {showStatusDropdown && (
+                <View>
+                  <Text style={s.floatingDropdownHeader}>FILTER BY COMPLIANCE STATUS</Text>
+                  {[
+                    { label: 'All Offices', value: 'all', dot: '#94a3b8' },
+                    { label: 'Complied', value: 'compiled', dot: '#059669' },
+                    { label: 'Partially Complied', value: 'partially', dot: '#d97706' },
+                    { label: 'Not Complied', value: 'not_compiled', dot: '#dc2626' },
+                  ].map((opt) => (
+                    <TouchableOpacity
+                      key={opt.label}
+                      style={[s.popoverItem, statusFilter === opt.value && s.popoverItemActive]}
+                      onPress={() => {
+                        setStatusFilter(opt.value as any);
+                        setShowStatusDropdown(false);
+                      }}
+                    >
+                      <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1 }}>
+                        <View style={[s.statusDotSmall, { backgroundColor: opt.dot }]} />
+                        <Text
+                          style={[
+                            s.popoverItemText,
+                            statusFilter === opt.value && s.popoverItemTextActive,
+                          ]}
+                        >
+                          {opt.label}
+                        </Text>
+                      </View>
+                      {statusFilter === opt.value && (
+                        <MaterialIcons name="check" size={16} color="#2563eb" />
+                      )}
+                    </TouchableOpacity>
+                  ))}
+                </View>
+              )}
+
+              {/* Active Events Selection Dropdown */}
+              {showEventPicker && events.length > 1 && (
+                <ScrollView style={{ maxHeight: 320 }} showsVerticalScrollIndicator={false}>
+                  <Text style={s.floatingDropdownHeader}>ACTIVE ACCREDITATION FRAMEWORKS</Text>
+                  {events.map((ev) => {
+                    const evId = String(getEventId(ev));
+                    const isCurr = evId === selectedEventId;
+                    return (
+                      <TouchableOpacity
+                        key={`ev-tab-${evId}`}
+                        style={[s.eventPickerItem, isCurr && s.eventPickerItemActive]}
+                        onPress={() => {
+                          setSelectedEventId(evId);
+                          setShowEventPicker(false);
+                        }}
+                      >
+                        <MaterialIcons
+                          name="fact-check"
+                          size={16}
+                          color={isCurr ? '#2563eb' : '#64748b'}
+                        />
+                        <Text
+                          style={[s.eventPickerItemText, isCurr && s.eventPickerItemTextActive]}
+                        >
+                          {ev.eventcode || ev.eventname}
+                        </Text>
+                        {isCurr && <MaterialIcons name="check" size={16} color="#2563eb" />}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              )}
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         {/* ─── Content Body: Academic Programs + Non-Academic Offices ─── */}
         {loading ? (
@@ -2098,7 +2168,10 @@ function renderOfficeCard(
   const totalReqs = Number(office.totalrequirements || office.total_requirements || 0);
   const compliance = Math.max(0, Math.min(100, Number(office.compliancepercent || 0)));
   const statusStr = String(office.overallstatus || 'Not Complied');
-  const isComplied = statusStr.toLowerCase().includes('complied') && !statusStr.toLowerCase().includes('not') && !statusStr.toLowerCase().includes('partial');
+  const isComplied =
+    statusStr.toLowerCase().includes('complied') &&
+    !statusStr.toLowerCase().includes('not') &&
+    !statusStr.toLowerCase().includes('partial');
   const isPartial = statusStr.toLowerCase().includes('partial');
 
   const headsList = Array.isArray(office.heads) ? office.heads : [];
@@ -2106,6 +2179,148 @@ function renderOfficeCard(
     Array.isArray(office.auditors) && office.auditors.length > 0
       ? office.auditors
       : officeAuditorsMap[getOfficeId(office)] || [];
+
+  /* ─── LIST VIEW ROW (Matches Web's renderOfficeListRow in OfficesP.jsx) ─── */
+  if (viewMode === 'list') {
+    const hasLevel =
+      isAcademic &&
+      office.accreditationlevel &&
+      office.accreditationlevel !== 'None' &&
+      String(office.accreditationlevel).toUpperCase() !== 'N/A';
+
+    return (
+      <TouchableOpacity
+        key={`office-list-${getOfficeId(office)}`}
+        style={s.programListRow}
+        onPress={() => onPress(office)}
+        activeOpacity={0.85}
+      >
+        {/* Top Row: Office Icon + Name/Meta + Chevron */}
+        <View style={s.programListTopRow}>
+          <View style={[s.programListIconBox, isAcademic ? s.academicIconBg : s.nonAcademicIconBg]}>
+            <MaterialIcons
+              name={isAcademic ? 'school' : 'apartment'}
+              size={20}
+              color={isAcademic ? '#0284c7' : '#059669'}
+            />
+          </View>
+
+          <View style={{ flex: 1, marginLeft: 10 }}>
+            <Text style={s.programListTitle} numberOfLines={1}>
+              {office.officename}
+            </Text>
+            <Text style={s.programListSubtitle} numberOfLines={1}>
+              {office.eventcode || 'PACUCOA 2027'}
+              {office.department_name ? ` • ${office.department_name}` : ''}
+              {office.program_type_name ? ` • ${office.program_type_name}` : ''}
+            </Text>
+            <Text style={s.programListDates} numberOfLines={1}>
+              CREATED: {formatDate(office.createdat)} • UPDATED:{' '}
+              {formatDate(office.updatedat || office.createdat)}
+            </Text>
+          </View>
+
+          <MaterialIcons name="chevron-right" size={20} color="#94a3b8" />
+        </View>
+
+        {/* Bottom Strip: Office Type, Compliance Status, Standards Count, Level */}
+        <View style={s.programListMetaRow}>
+          {/* Office Type Badge */}
+          <View
+            style={[
+              s.programListPill,
+              isAcademic
+                ? { backgroundColor: '#eff6ff', borderColor: '#dbeafe' }
+                : { backgroundColor: '#ecfdf5', borderColor: '#d1fae5' },
+            ]}
+          >
+            <Text
+              style={[
+                s.programListPillText,
+                { color: isAcademic ? '#1d4ed8' : '#047857' },
+              ]}
+            >
+              {office.office_type_name || (isAcademic ? 'Academic' : 'Non Academic')}
+            </Text>
+          </View>
+
+          {/* Compliance Status Pill */}
+          <View
+            style={[
+              s.programListPill,
+              totalReqs === 0
+                ? { backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }
+                : isComplied
+                ? { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' }
+                : isPartial
+                ? { backgroundColor: '#fffbeb', borderColor: '#fde68a' }
+                : { backgroundColor: '#fef2f2', borderColor: '#fecaca' },
+            ]}
+          >
+            <View
+              style={[
+                s.statusDotSmall,
+                totalReqs === 0
+                  ? { backgroundColor: '#94a3b8' }
+                  : isComplied
+                  ? { backgroundColor: '#059669' }
+                  : isPartial
+                  ? { backgroundColor: '#d97706' }
+                  : { backgroundColor: '#dc2626' },
+              ]}
+            />
+            <Text
+              style={[
+                s.programListPillText,
+                totalReqs === 0
+                  ? { color: '#64748b' }
+                  : isComplied
+                  ? { color: '#059669' }
+                  : isPartial
+                  ? { color: '#d97706' }
+                  : { color: '#dc2626' },
+              ]}
+            >
+              {totalReqs === 0
+                ? 'No Standards'
+                : isComplied
+                ? 'Complied'
+                : isPartial
+                ? 'Partially Complied'
+                : 'Not Complied'}
+            </Text>
+          </View>
+
+          {/* Standards Count */}
+          <View style={[s.programListPill, { backgroundColor: '#f8fafc', borderColor: '#e2e8f0' }]}>
+            <Text style={[s.programListPillText, { color: '#334155', fontWeight: '700' }]}>
+              {totalReqs} {totalReqs === 1 ? 'Standard' : 'Standards'}
+            </Text>
+          </View>
+
+          {/* Level Status */}
+          {hasLevel ? (
+            <View
+              style={[
+                s.programListPill,
+                { backgroundColor: '#ecfdf5', borderColor: '#a7f3d0' },
+              ]}
+            >
+              <MaterialIcons
+                name="workspace-premium"
+                size={11}
+                color="#059669"
+                style={{ marginRight: 3 }}
+              />
+              <Text style={[s.programListPillText, { color: '#047857', fontWeight: '700' }]}>
+                {office.accreditationlevel}
+              </Text>
+            </View>
+          ) : null}
+        </View>
+      </TouchableOpacity>
+    );
+  }
 
   return (
     <TouchableOpacity
@@ -2339,7 +2554,8 @@ const s = StyleSheet.create({
   },
   scrollContent: {
     flex: 1,
-    padding: 16,
+    paddingHorizontal: 14,
+    paddingTop: 10,
   },
   bannerCard: {
     backgroundColor: '#ffffff',
@@ -2459,24 +2675,116 @@ const s = StyleSheet.create({
     shadowRadius: 8,
     elevation: 4,
   },
+  floatingDropdownBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.25)',
+    justifyContent: 'flex-start',
+    paddingTop: Platform.OS === 'ios' ? 190 : 165,
+    paddingHorizontal: 16,
+  },
+  floatingDropdownCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    padding: 8,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.16,
+    shadowRadius: 20,
+    elevation: 12,
+  },
+  floatingDropdownHeader: {
+    fontSize: 9.5,
+    fontWeight: '800',
+    color: '#94a3b8',
+    letterSpacing: 0.6,
+    paddingHorizontal: 10,
+    paddingTop: 6,
+    paddingBottom: 6,
+  },
   popoverItem: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
     paddingHorizontal: 10,
-    paddingVertical: 7,
-    borderRadius: 6,
+    paddingVertical: 9,
+    borderRadius: 8,
   },
   popoverItemActive: {
     backgroundColor: '#eff6ff',
   },
   popoverItemText: {
-    fontSize: 11,
+    fontSize: 12,
     fontWeight: '600',
     color: '#334155',
   },
   popoverItemTextActive: {
     color: '#2563eb',
     fontWeight: '800',
+  },
+  programListRow: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 12,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    shadowColor: '#0f172a',
+    shadowOpacity: 0.02,
+    shadowOffset: { width: 0, height: 1 },
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  programListTopRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+  },
+  programListIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+  },
+  programListTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  programListSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  programListDates: {
+    fontSize: 9.5,
+    color: '#94a3b8',
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  programListMetaRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+  },
+  programListPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderRadius: 999,
+    borderWidth: 1,
+    paddingHorizontal: 8,
+    paddingVertical: 2.5,
+  },
+  programListPillText: {
+    fontSize: 10,
+    fontWeight: '600',
   },
   eventSelectorRow: {
     marginTop: 12,

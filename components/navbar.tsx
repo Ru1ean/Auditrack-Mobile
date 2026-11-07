@@ -1,5 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { MaterialIcons } from '@expo/vector-icons';
+import { Feather, MaterialCommunityIcons, MaterialIcons } from '@expo/vector-icons';
 import { usePathname, useRouter } from 'expo-router';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
@@ -13,7 +13,6 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import {
   getStoredUser,
   normalizeUser,
@@ -487,7 +486,7 @@ export default function Navbar() {
   });
 
   return (
-    <SafeAreaView style={styles.safeAreaNavbar} edges={['top']}>
+    <View style={styles.safeAreaNavbar}>
       <View style={styles.headerContainer}>
         {/* Left: Brand & Greeting (Matches Web Header.jsx) */}
         <View style={styles.leftRow}>
@@ -519,7 +518,7 @@ export default function Navbar() {
             onPress={handleOpenNotifPopup}
             activeOpacity={0.8}
           >
-            <MaterialIcons name="notifications-none" size={20} color="#475569" />
+            <Feather name="bell" size={18} color="#475569" />
             {unreadCount > 0 ? (
               <View style={styles.unreadBadge}>
                 <Text style={styles.unreadBadgeText}>
@@ -548,9 +547,9 @@ export default function Navbar() {
             <Text style={styles.profileFirstName} numberOfLines={1}>
               {firstName}
             </Text>
-            <MaterialIcons
-              name="keyboard-arrow-down"
-              size={16}
+            <Feather
+              name="chevron-down"
+              size={14}
               color="#94a3b8"
               style={showProfileDropdown ? { transform: [{ rotate: '180deg' }] } : undefined}
             />
@@ -605,7 +604,11 @@ export default function Navbar() {
                 activeOpacity={0.75}
               >
                 <View style={styles.dropdownMenuIconBox}>
-                  <MaterialIcons name="business" size={16} color="#64748b" />
+                  <MaterialCommunityIcons
+                    name="office-building-outline"
+                    size={16}
+                    color="#64748b"
+                  />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.dropdownMenuTitle}>Programs &amp; Offices</Text>
@@ -624,7 +627,7 @@ export default function Navbar() {
                 activeOpacity={0.75}
               >
                 <View style={styles.dropdownMenuIconBox}>
-                  <MaterialIcons name="person-outline" size={16} color="#64748b" />
+                  <Feather name="user" size={16} color="#64748b" />
                 </View>
                 <View style={{ flex: 1 }}>
                   <Text style={styles.dropdownMenuTitle}>My Profile</Text>
@@ -641,7 +644,7 @@ export default function Navbar() {
                 activeOpacity={0.75}
               >
                 <View style={styles.dropdownSignOutIconBox}>
-                  <MaterialIcons name="logout" size={16} color="#ef4444" />
+                  <Feather name="log-out" size={16} color="#ef4444" />
                 </View>
                 <Text style={styles.dropdownSignOutText}>Sign Out</Text>
               </TouchableOpacity>
@@ -927,7 +930,7 @@ export default function Navbar() {
           </Pressable>
         </Pressable>
       </Modal>
-    </SafeAreaView>
+    </View>
   );
 }
 
@@ -936,7 +939,7 @@ const styles = StyleSheet.create({
     backgroundColor: '#ffffff',
   },
   headerContainer: {
-    height: 56,
+    height: 48,
     backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',

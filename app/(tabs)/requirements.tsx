@@ -10,6 +10,7 @@ import {
   AppState,
   Modal,
   Platform,
+  Pressable,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -855,49 +856,65 @@ export default function RequirementsStandardsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Status Dropdown Popover Menu (Matching Image 4) */}
-        {showStatusFilterMenu && (
-          <View style={s.statusDropdownMenu}>
-            <TouchableOpacity
-              style={[
-                s.statusDropdownItem,
-                eventStatusFilter === 'active' && s.statusDropdownItemActive,
-              ]}
-              onPress={() => {
-                setEventStatusFilter('active');
-                setShowStatusFilterMenu(false);
-              }}
-            >
-              <Text
+        {/* Status Dropdown Popover Menu (Floating Modal so it never pushes items down) */}
+        <Modal
+          visible={showStatusFilterMenu}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setShowStatusFilterMenu(false)}
+        >
+          <Pressable
+            style={s.statusDropdownBackdrop}
+            onPress={() => setShowStatusFilterMenu(false)}
+          >
+            <Pressable style={s.statusDropdownMenu} onPress={(e) => e.stopPropagation()}>
+              <TouchableOpacity
                 style={[
-                  s.statusDropdownItemText,
-                  eventStatusFilter === 'active' && s.statusDropdownItemTextActive,
+                  s.statusDropdownItem,
+                  eventStatusFilter === 'active' && s.statusDropdownItemActive,
                 ]}
+                onPress={() => {
+                  setEventStatusFilter('active');
+                  setShowStatusFilterMenu(false);
+                }}
               >
-                Active Standards
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[
-                s.statusDropdownItem,
-                eventStatusFilter === 'inactive' && s.statusDropdownItemActive,
-              ]}
-              onPress={() => {
-                setEventStatusFilter('inactive');
-                setShowStatusFilterMenu(false);
-              }}
-            >
-              <Text
+                <Text
+                  style={[
+                    s.statusDropdownItemText,
+                    eventStatusFilter === 'active' && s.statusDropdownItemTextActive,
+                  ]}
+                >
+                  Active Standards
+                </Text>
+                {eventStatusFilter === 'active' && (
+                  <MaterialIcons name="check" size={16} color="#2563eb" />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
                 style={[
-                  s.statusDropdownItemText,
-                  eventStatusFilter === 'inactive' && s.statusDropdownItemTextActive,
+                  s.statusDropdownItem,
+                  eventStatusFilter === 'inactive' && s.statusDropdownItemActive,
                 ]}
+                onPress={() => {
+                  setEventStatusFilter('inactive');
+                  setShowStatusFilterMenu(false);
+                }}
               >
-                Inactive Standards
-              </Text>
-            </TouchableOpacity>
-          </View>
-        )}
+                <Text
+                  style={[
+                    s.statusDropdownItemText,
+                    eventStatusFilter === 'inactive' && s.statusDropdownItemTextActive,
+                  ]}
+                >
+                  Inactive Standards
+                </Text>
+                {eventStatusFilter === 'inactive' && (
+                  <MaterialIcons name="check" size={16} color="#2563eb" />
+                )}
+              </TouchableOpacity>
+            </Pressable>
+          </Pressable>
+        </Modal>
 
         {/* ─── Accreditation Cards Grid (Matching Image 1 & EventCard.jsx) ─── */}
         {loading ? (
@@ -2003,7 +2020,8 @@ const s = StyleSheet.create({
   },
 
   mainScrollContent: {
-    padding: 16,
+    paddingHorizontal: 14,
+    paddingTop: 10,
     paddingBottom: 40,
   },
 
@@ -2079,21 +2097,31 @@ const s = StyleSheet.create({
     fontWeight: '700',
     color: '#1e293b',
   },
+  statusDropdownBackdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.25)',
+    justifyContent: 'flex-start',
+    alignItems: 'flex-end',
+    paddingTop: Platform.OS === 'ios' ? 175 : 150,
+    paddingHorizontal: 16,
+  },
   statusDropdownMenu: {
+    width: 210,
     backgroundColor: '#ffffff',
     borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginTop: -8,
-    marginBottom: 14,
     padding: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 10,
-    elevation: 6,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    elevation: 10,
   },
   statusDropdownItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: 8,
@@ -2301,8 +2329,8 @@ const s = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#e2e8f0',
     paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 52 : 36,
-    paddingBottom: 14,
+    paddingTop: Platform.OS === 'ios' ? 44 : 12,
+    paddingBottom: 12,
   },
   structureHeaderIconBox: {
     width: 42,
