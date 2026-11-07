@@ -668,6 +668,14 @@ export default function EvidenceFilesPanel({
   const isEditingActiveRef = useRef(false);
   isEditingActiveRef.current = renaming || Boolean(renameTarget);
 
+  const onRefreshRequirementsRef = useRef(onRefreshRequirements);
+  onRefreshRequirementsRef.current = onRefreshRequirements;
+  const hasInitialLoadedRef = useRef(false);
+
+  useEffect(() => {
+    hasInitialLoadedRef.current = false;
+  }, [requirementId, selectedSubmitterId, officeId]);
+
   // Load files (with silent background live-polling support)
   const loadFiles = useCallback(
     async (options?: { silent?: boolean }) => {
@@ -677,7 +685,7 @@ export default function EvidenceFilesPanel({
         : currentUserId;
       if (!targetUserId) return;
 
-      const isSilent = Boolean(options?.silent);
+      const isSilent = Boolean(options?.silent) || hasInitialLoadedRef.current;
       if (!isSilent) {
         setLoading(true);
       }
@@ -709,6 +717,9 @@ export default function EvidenceFilesPanel({
           return;
         }
 
+        const wasInitialLoad = !hasInitialLoadedRef.current;
+        hasInitialLoadedRef.current = true;
+
         setFiles((prev) => {
           // Compare previous and next to detect status or order updates
           const prevKey = prev
@@ -729,8 +740,10 @@ export default function EvidenceFilesPanel({
             .join('|');
 
           if (prevKey !== nextKey) {
-            // Updated! Notify parent screen silently
-            onRefreshRequirements?.();
+            if (!wasInitialLoad) {
+              // Notify parent screen silently only on real subsequent changes
+              onRefreshRequirementsRef.current?.();
+            }
             return list;
           }
           return prev;
@@ -740,12 +753,10 @@ export default function EvidenceFilesPanel({
           setFiles([]);
         }
       } finally {
-        if (!isSilent) {
-          setLoading(false);
-        }
+        setLoading(false);
       }
     },
-    [requirementId, currentUserId, isAuditor, isAdmin, selectedSubmitterId, officeId, onRefreshRequirements]
+    [requirementId, currentUserId, isAuditor, isAdmin, selectedSubmitterId, officeId]
   );
 
   useEffect(() => {
@@ -753,10 +764,10 @@ export default function EvidenceFilesPanel({
     void getAuthHeaders().then(setAuthHeaders);
     void loadFiles({ silent: false });
 
-    // Live background polling every 2.5 seconds while panel is open
+    // Live background polling every 6 seconds while panel is open
     const pollInterval = setInterval(() => {
       void loadFiles({ silent: true });
-    }, 2500);
+    }, 6000);
 
     // Immediate refresh on return from background
     const appStateSub = AppState.addEventListener('change', (state) => {

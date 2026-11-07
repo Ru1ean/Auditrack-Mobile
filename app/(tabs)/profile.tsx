@@ -678,13 +678,13 @@ export default function ProgramsAndOfficesScreen() {
     roleFilteredOffices,
   ]);
 
-  // Live polling while Office Inspection modal is open
+  // Live polling while Office Inspection modal is open (paused while EvidenceFilesPanel is open)
   useEffect(() => {
-    if (!selectedOfficeForInspection) return;
+    if (!selectedOfficeForInspection || evidencePanelReq) return;
 
     const pollInterval = setInterval(() => {
       void openOfficeInspection(selectedOfficeForInspection, { silent: true });
-    }, 3000);
+    }, 8000);
 
     const appStateSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
@@ -696,7 +696,7 @@ export default function ProgramsAndOfficesScreen() {
       clearInterval(pollInterval);
       appStateSub.remove();
     };
-  }, [selectedOfficeForInspection]);
+  }, [selectedOfficeForInspection, evidencePanelReq]);
 
   // Compute submission counts for Personnel
   const submissionCounts = useMemo(() => {

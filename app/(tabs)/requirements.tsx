@@ -351,14 +351,14 @@ export default function RequirementsStandardsScreen() {
     [selectedEventForStructure]
   );
 
-  // Live polling while Event Structure is open
+  // Live polling while Event Structure is open (paused while EvidenceFilesPanel is open)
   useEffect(() => {
-    if (!selectedEventForStructure) return;
+    if (!selectedEventForStructure || evidencePanelReq) return;
 
-    // Silent background poll every 3 seconds while viewing structure
+    // Silent background poll every 8 seconds while viewing structure
     const pollInterval = setInterval(() => {
       void refreshStructureData({ silent: true });
-    }, 3000);
+    }, 8000);
 
     const appStateSub = AppState.addEventListener('change', (state) => {
       if (state === 'active') {
@@ -370,7 +370,7 @@ export default function RequirementsStandardsScreen() {
       clearInterval(pollInterval);
       appStateSub.remove();
     };
-  }, [selectedEventForStructure, refreshStructureData]);
+  }, [selectedEventForStructure, evidencePanelReq, refreshStructureData]);
 
   // Load Event Structure when an Accreditation Card's "Open Structure >" is tapped
   const openEventStructure = async (
