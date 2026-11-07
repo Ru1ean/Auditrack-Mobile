@@ -15,8 +15,9 @@ export const BASE_URL = API_BASE_URL.endsWith('/api')
   ? API_BASE_URL
   : `${API_BASE_URL}/api`;
 
-export const SUPABASE_PROFILE_STORAGE =
-  'https://ylluxulqxkjircffndxg.supabase.co/storage/v1/object/public/profile-pics';
+export const SUPABASE_PROFILE_STORAGE = normalizeBaseUrl(
+  process.env.EXPO_PUBLIC_SUPABASE_PROFILE_STORAGE || ''
+);
 
 export const apiUrl = (endpoint = '') => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -359,7 +360,10 @@ export const getProfilePicUrl = (userOrPic?: any): string | null => {
     .replace(/^\/?(api\/)?uploads\/profile-pics\//, '')
     .replace(/^\/?profile-pics\//, '')
     .replace(/^\//, '');
-  if (cleanName.startsWith('profilepic-') || cleanName.startsWith('profilepic')) {
+  if (
+    SUPABASE_PROFILE_STORAGE &&
+    (cleanName.startsWith('profilepic-') || cleanName.startsWith('profilepic'))
+  ) {
     return `${SUPABASE_PROFILE_STORAGE}/${cleanName}`;
   }
 

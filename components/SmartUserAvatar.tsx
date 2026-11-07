@@ -171,7 +171,12 @@ export default function SmartUserAvatar({
           contentFit="cover"
           transition={150}
           onError={() => {
-            if (!fallbackSrc && resolvedPicUrl && !resolvedPicUrl.includes(SUPABASE_PROFILE_STORAGE)) {
+            if (
+              SUPABASE_PROFILE_STORAGE &&
+              !fallbackSrc &&
+              resolvedPicUrl &&
+              !resolvedPicUrl.includes(SUPABASE_PROFILE_STORAGE)
+            ) {
               const filename = resolvedPicUrl.split('/').pop();
               if (filename && filename.includes('.')) {
                 setFallbackSrc(`${SUPABASE_PROFILE_STORAGE}/${filename}`);
