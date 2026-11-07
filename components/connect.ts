@@ -5,8 +5,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
-const DEFAULT_API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://compliance-audit.onrender.com';
+const DEFAULT_API_BASE_URL = process.env.EXPO_PUBLIC_API_BASE_URL || '';
 
 const normalizeBaseUrl = (url: string) => url.trim().replace(/\/+$/, '');
 
