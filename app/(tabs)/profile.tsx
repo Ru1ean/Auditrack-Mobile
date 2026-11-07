@@ -1,6 +1,7 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { MaterialIcons } from '@expo/vector-icons';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import { useLocalSearchParams } from 'expo-router';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -120,6 +121,18 @@ const isAcademicEntity = (entity: any) => {
 };
 
 export default function ProgramsAndOfficesScreen() {
+  const notifParams = useLocalSearchParams<{
+    fromNotif?: string;
+    officeid?: string;
+    requirementid?: string;
+    areaid?: string;
+    eventid?: string;
+    openSubmission?: string;
+    viewUserId?: string;
+    notifTs?: string;
+  }>();
+  const lastHandledNotifTsRef = useRef<string>('');
+
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -527,7 +540,17 @@ export default function ProgramsAndOfficesScreen() {
   );
 
   // ── OPEN OFFICE INSPECTION MODAL (Screenshot 5) ──
-  const openOfficeInspection = async (office: any, options?: { silent?: boolean }) => {
+  const openOfficeInspection = async (
+    office: any,
+    options?: {
+      silent?: boolean;
+      deepLink?: {
+        requirementid?: number | string | null;
+        areaid?: number | string | null;
+        openSubmission?: boolean;
+      };
+    }
+  ) => {
     setSelectedOfficeForInspection(office);
     const isSilent = Boolean(options?.silent);
     if (!isSilent) {
@@ -555,6 +578,18 @@ export default function ProgramsAndOfficesScreen() {
         });
         setExpandedAreaIds(areaIds);
         setExpandedCriteriaIds(critIds);
+
+        // Handle deep-link from Notification (open specific requirement / submission)
+        const targetReqId = Number(options?.deepLink?.requirementid || 0);
+        if (targetReqId > 0) {
+          setExpandedReqIds((prev) => new Set(prev).add(targetReqId));
+          const matchedReq = reqList.find(
+            (r: any) => Number(r.requirementid ?? r.RequirementID ?? 0) === targetReqId
+          );
+          if (matchedReq && options?.deepLink?.openSubmission !== false) {
+            setEvidencePanelReq(matchedReq);
+          }
+        }
       }
 
       // Fetch assigned personnel for requirements
@@ -584,6 +619,64 @@ export default function ProgramsAndOfficesScreen() {
       }
     }
   };
+
+  // Deep-link listener from Notifications (1:1 Match with Web Organization.jsx)
+  useEffect(() => {
+    if (notifParams.fromNotif !== '1' || loading) return;
+    const tsKey = String(
+      notifParams.notifTs || `${notifParams.officeid}-${notifParams.requirementid}`
+    );
+    if (lastHandledNotifTsRef.current === tsKey) return;
+
+    const runDeepLink = async () => {
+      let targetOfficeId = Number(notifParams.officeid || 0);
+      let foundOffice = targetOfficeId
+        ? offices.find((o) => getOfficeId(o) === targetOfficeId)
+        : null;
+
+      if (!foundOffice && targetOfficeId) {
+        try {
+          const raw = await officesAPI.getById(targetOfficeId);
+          if (raw && (raw.officeid || raw.id || raw.data)) {
+            foundOffice = raw.data || raw;
+          }
+        } catch {
+          // ignore
+        }
+      }
+
+      if (!foundOffice && roleFilteredOffices.length > 0) {
+        foundOffice = roleFilteredOffices[0];
+      }
+
+      if (foundOffice) {
+        lastHandledNotifTsRef.current = tsKey;
+        const evId = String(foundOffice.eventid ?? foundOffice.EventID ?? '');
+        if (evId) {
+          setSelectedEventId(evId);
+        }
+        await openOfficeInspection(foundOffice, {
+          deepLink: {
+            requirementid: notifParams.requirementid || null,
+            areaid: notifParams.areaid || null,
+            openSubmission: notifParams.openSubmission === '1',
+          },
+        });
+      }
+    };
+
+    void runDeepLink();
+  }, [
+    notifParams.fromNotif,
+    notifParams.officeid,
+    notifParams.requirementid,
+    notifParams.areaid,
+    notifParams.openSubmission,
+    notifParams.notifTs,
+    loading,
+    offices,
+    roleFilteredOffices,
+  ]);
 
   // Live polling while Office Inspection modal is open
   useEffect(() => {

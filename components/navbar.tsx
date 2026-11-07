@@ -24,33 +24,165 @@ import {
 } from './connect';
 import SmartUserAvatar from './SmartUserAvatar';
 
-const META_REGEX = /\n?\[\[meta:(\{[\s\S]*\})\]\]$/;
+const META_TAG = '[[meta:';
+const META_END = ']]';
 
 export function parseMetaFromMessage(message?: string | null) {
-  if (!message || typeof message !== 'string') return { cleanMessage: '', meta: null };
-  const match = message.match(META_REGEX);
-  if (!match) return { cleanMessage: message, meta: null };
-  let meta: any = null;
+  const raw = String(message || '');
+  const start = raw.lastIndexOf(META_TAG);
+  if (start === -1) return { cleanMessage: raw.trim(), meta: null };
+
+  const end = raw.indexOf(META_END, start);
+  if (end === -1) return { cleanMessage: raw.trim(), meta: null };
+
   try {
-    meta = JSON.parse(match[1]);
+    const meta = JSON.parse(raw.slice(start + META_TAG.length, end));
+    return { cleanMessage: raw.slice(0, start).trim(), meta };
   } catch {
-    meta = null;
+    return { cleanMessage: raw.trim(), meta: null };
   }
-  const cleanMessage = message.replace(META_REGEX, '').trim();
-  return { cleanMessage, meta };
 }
 
 export function getNotificationMeta(notification: any) {
   if (!notification) return {};
-  if (notification.meta && typeof notification.meta === 'object') return notification.meta;
-  const { meta } = parseMetaFromMessage(notification.message || notification.Message || '');
-  return meta || {};
+  const msg =
+    notification?.Message ??
+    notification?.message ??
+    notification?.Title ??
+    notification?.title ??
+    notification?.text ??
+    '';
+  const { meta } = parseMetaFromMessage(msg);
+  const table = String(
+    notification?.relatedtable || notification?.RelatedTable || ''
+  ).toLowerCase();
+  const rawRelatedId = notification?.relatedid ?? notification?.RelatedID;
+  const relatedid = rawRelatedId != null ? Number(rawRelatedId) : null;
+
+  const officeid =
+    meta?.officeid ??
+    ([
+      'office_head',
+      'office_personnel',
+      'requirements_assignment',
+      'requirement_file_upload',
+      'offices',
+    ].includes(table)
+      ? relatedid
+      : null);
+
+  const requirementid =
+    meta?.requirementid ??
+    (['requirements', 'requirement_comments'].includes(table) ? relatedid : null);
+
+  const areaid =
+    meta?.areaIds?.[0] ??
+    meta?.areaid ??
+    (table === 'areas' ? relatedid : null);
+
+  const eventid =
+    meta?.eventid ??
+    (table === 'events' ? relatedid : null);
+
+  return {
+    ...(meta || {}),
+    officeid: officeid != null && !Number.isNaN(Number(officeid)) ? Number(officeid) : null,
+    requirementid:
+      requirementid != null && !Number.isNaN(Number(requirementid))
+        ? Number(requirementid)
+        : null,
+    areaid: areaid != null && !Number.isNaN(Number(areaid)) ? Number(areaid) : null,
+    eventid: eventid != null && !Number.isNaN(Number(eventid)) ? Number(eventid) : null,
+    viewUserId:
+      meta?.viewUserId != null && !Number.isNaN(Number(meta.viewUserId))
+        ? Number(meta.viewUserId)
+        : null,
+    openSubmission:
+      Boolean(meta?.openSubmission) ||
+      table === 'requirement_file_upload' ||
+      table.includes('comment'),
+  };
 }
 
 export function getDisplayMessage(notification: any) {
   if (!notification) return '';
-  const { cleanMessage } = parseMetaFromMessage(notification.message || notification.Message || '');
-  return cleanMessage || notification.message || notification.Message || '';
+  const msg =
+    notification?.Message ??
+    notification?.message ??
+    notification?.Title ??
+    notification?.title ??
+    notification?.text ??
+    '';
+  return parseMetaFromMessage(msg).cleanMessage;
+}
+
+export function buildNotificationRedirectMobile(notification: any): {
+  pathname: '/(tabs)/account' | '/(tabs)/profile' | '/(tabs)/requirements';
+  params?: Record<string, string>;
+} {
+  const table = String(
+    notification?.relatedtable || notification?.RelatedTable || ''
+  ).toLowerCase();
+  const meta = getNotificationMeta(notification);
+  const notifTs = String(Date.now());
+
+  if (table === 'users_role' || table === 'users' || table === 'user') {
+    return { pathname: '/(tabs)/account' };
+  }
+
+  // Personnel accreditation assignment notifications -> Accreditation screen (ALLC)
+  if (table === 'personnelassignments' || table === 'personnel_assignment') {
+    return {
+      pathname: '/(tabs)/requirements',
+      params: {
+        fromNotif: '1',
+        eventid: meta.eventid ? String(meta.eventid) : '',
+        areaid: meta.areaid ? String(meta.areaid) : '',
+        requirementid: meta.requirementid ? String(meta.requirementid) : '',
+        openSubmission: meta.openSubmission ? '1' : '0',
+        notifTs,
+      },
+    };
+  }
+
+  // Office-scoped notifications -> Programs & Offices screen (Organization.jsx)
+  if (
+    meta.officeid ||
+    table === 'office_head' ||
+    table === 'office_personnel' ||
+    table === 'offices' ||
+    table === 'requirements_assignment' ||
+    table === 'requirement_file_upload' ||
+    table === 'auditor_assignments' ||
+    table === 'auditorareaassignments'
+  ) {
+    return {
+      pathname: '/(tabs)/profile',
+      params: {
+        fromNotif: '1',
+        officeid: meta.officeid ? String(meta.officeid) : '',
+        requirementid: meta.requirementid ? String(meta.requirementid) : '',
+        areaid: meta.areaid ? String(meta.areaid) : '',
+        eventid: meta.eventid ? String(meta.eventid) : '',
+        openSubmission: meta.openSubmission || meta.requirementid ? '1' : '0',
+        viewUserId: meta.viewUserId ? String(meta.viewUserId) : '',
+        notifTs,
+      },
+    };
+  }
+
+  // Fallback: Accreditation / Requirements structure
+  return {
+    pathname: '/(tabs)/requirements',
+    params: {
+      fromNotif: '1',
+      eventid: meta.eventid ? String(meta.eventid) : '',
+      areaid: meta.areaid ? String(meta.areaid) : '',
+      requirementid: meta.requirementid ? String(meta.requirementid) : '',
+      openSubmission: meta.openSubmission || meta.requirementid ? '1' : '0',
+      notifTs,
+    },
+  };
 }
 
 export function getCategoryStyle(type?: string, relatedTable?: string) {
@@ -305,22 +437,9 @@ export default function Navbar() {
       await handleMarkAsRead(id);
     }
 
-    const meta = getNotificationMeta(notification);
-    const relatedTable = String(
-      notification?.relatedtable || notification?.RelatedTable || ''
-    ).toLowerCase();
-
+    const target = buildNotificationRedirectMobile(notification);
     setShowNotifPopup(false);
-
-    if (
-      meta?.targetPath === '/organization' ||
-      relatedTable.includes('office')
-    ) {
-      router.push('/(tabs)/profile');
-      return;
-    }
-
-    router.push('/(tabs)/requirements');
+    router.push(target as any);
   };
 
   const handleLogout = async () => {
@@ -684,11 +803,7 @@ export default function Navbar() {
                           styles.notifRowItem,
                           !isRead && styles.notifRowItemUnread,
                         ]}
-                        onPress={() => {
-                          if (!isRead && id) {
-                            void handleMarkAsRead(id);
-                          }
-                        }}
+                        onPress={() => void handleNavigateFromNotification(item)}
                         activeOpacity={0.85}
                       >
                         {!isRead ? <View style={styles.unreadLeftAccent} /> : null}

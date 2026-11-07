@@ -17,10 +17,10 @@ import {
   usersAPI,
 } from '../../components/connect';
 import {
+  buildNotificationRedirectMobile,
   formatNotificationRelativeTime,
   getCategoryStyle,
   getDisplayMessage,
-  getNotificationMeta,
 } from '../../components/navbar';
 
 type Filter = 'all' | 'unread' | 'read';
@@ -114,15 +114,6 @@ export default function NotificationsScreen() {
     };
   }, [loadData]);
 
-  const resolveNotificationRoute = (item: any) => {
-    const meta = getNotificationMeta(item);
-    const table = String(item?.relatedtable || item?.RelatedTable || '').toLowerCase();
-    if (meta?.targetPath === '/organization' || table.includes('office')) {
-      return '/(tabs)/profile';
-    }
-    return '/(tabs)/requirements';
-  };
-
   const markAsRead = async (notificationId: number) => {
     try {
       const res = await notificationsAPI.markAsRead(notificationId);
@@ -177,10 +168,8 @@ export default function NotificationsScreen() {
       await markAsRead(notificationId);
     }
 
-    const route = resolveNotificationRoute(item);
-    if (route) {
-      router.push(route as any);
-    }
+    const target = buildNotificationRedirectMobile(item);
+    router.push(target as any);
   };
 
   const onRefresh = () => {
@@ -321,11 +310,7 @@ export default function NotificationsScreen() {
               return (
                 <TouchableOpacity
                   style={[styles.notifRow, !isRead && styles.notifRowUnread]}
-                  onPress={() => {
-                    if (!isRead && notifId) {
-                      void markAsRead(notifId);
-                    }
-                  }}
+                  onPress={() => void handleViewDetails(item)}
                   activeOpacity={0.85}
                 >
                   {!isRead ? <View style={styles.unreadLeftAccent} /> : null}

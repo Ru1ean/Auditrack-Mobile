@@ -1,8 +1,9 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useLocalSearchParams } from 'expo-router';
 import SmartUserAvatar from '../../components/SmartUserAvatar';
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -85,6 +86,16 @@ const getInitials = (name: string) => {
 };
 
 export default function RequirementsStandardsScreen() {
+  const notifParams = useLocalSearchParams<{
+    fromNotif?: string;
+    eventid?: string;
+    areaid?: string;
+    requirementid?: string;
+    openSubmission?: string;
+    notifTs?: string;
+  }>();
+  const lastHandledNotifTsRef = useRef<string>('');
+
   const [currentUser, setCurrentUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -362,7 +373,14 @@ export default function RequirementsStandardsScreen() {
   }, [selectedEventForStructure, refreshStructureData]);
 
   // Load Event Structure when an Accreditation Card's "Open Structure >" is tapped
-  const openEventStructure = async (event: any) => {
+  const openEventStructure = async (
+    event: any,
+    deepLink?: {
+      areaid?: number | string | null;
+      requirementid?: number | string | null;
+      openSubmission?: boolean;
+    }
+  ) => {
     setSelectedEventForStructure(event);
     setStructureTab('areas');
     setStructureSearch('');
@@ -404,8 +422,39 @@ export default function RequirementsStandardsScreen() {
         setMyFileStatsByReq(myReqRes.fileStatsByReq);
       }
 
-      // Default expand the first area or all areas with assignments
-      if (areasList.length > 0) {
+      // Default expand the first area or deep-linked area/requirement
+      const targetReqId = Number(deepLink?.requirementid || 0);
+      const targetAreaId = Number(deepLink?.areaid || 0);
+
+      if (targetReqId > 0) {
+        const matchedReq = reqList.find(
+          (r: any) => getEntityId(r, 'requirementid') === targetReqId
+        );
+        if (matchedReq) {
+          const cId = Number(matchedReq.criteriaid ?? matchedReq.CriteriaID ?? 0);
+          const matchedCrit = critList.find(
+            (c: any) => getEntityId(c, 'criteriaid') === cId
+          );
+          const aId = Number(
+            matchedReq.areaid ??
+              matchedReq.AreaID ??
+              matchedCrit?.areaid ??
+              matchedCrit?.AreaID ??
+              targetAreaId ??
+              0
+          );
+          if (aId) setExpandedAreaIds(new Set([aId]));
+          if (cId) setExpandedCriteriaIds(new Set([cId]));
+          setExpandedReqIds(new Set([targetReqId]));
+          if (deepLink?.openSubmission !== false) {
+            setEvidencePanelReq(matchedReq);
+          }
+        } else if (areasList.length > 0) {
+          setExpandedAreaIds(new Set([getEntityId(areasList[0], 'areaid')]));
+        }
+      } else if (targetAreaId > 0) {
+        setExpandedAreaIds(new Set([targetAreaId]));
+      } else if (areasList.length > 0) {
         setExpandedAreaIds(new Set([getEntityId(areasList[0], 'areaid')]));
       }
     } catch (err) {
@@ -415,6 +464,40 @@ export default function RequirementsStandardsScreen() {
       setLoadingStructure(false);
     }
   };
+
+  // Deep-link listener from Notifications (1:1 Match with Web ALLC.jsx)
+  useEffect(() => {
+    if (notifParams.fromNotif !== '1' || loading || events.length === 0) return;
+    const tsKey = String(
+      notifParams.notifTs ||
+        `${notifParams.eventid}-${notifParams.areaid}-${notifParams.requirementid}`
+    );
+    if (lastHandledNotifTsRef.current === tsKey) return;
+
+    const targetEventId = Number(notifParams.eventid || 0);
+    const targetEvent =
+      (targetEventId
+        ? events.find((e) => getEntityId(e, 'eventid') === targetEventId)
+        : null) || events[0];
+
+    if (targetEvent) {
+      lastHandledNotifTsRef.current = tsKey;
+      void openEventStructure(targetEvent, {
+        areaid: notifParams.areaid || null,
+        requirementid: notifParams.requirementid || null,
+        openSubmission: notifParams.openSubmission === '1',
+      });
+    }
+  }, [
+    notifParams.fromNotif,
+    notifParams.eventid,
+    notifParams.areaid,
+    notifParams.requirementid,
+    notifParams.openSubmission,
+    notifParams.notifTs,
+    loading,
+    events,
+  ]);
 
   // Map Personnel Assignments across Area, Criteria, and Standard levels
   const { assignedPersonnelMap } = useMemo(() => {
