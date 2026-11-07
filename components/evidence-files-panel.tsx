@@ -203,11 +203,12 @@ type DraggableFileCardProps = {
   reordering: boolean;
   authHeaders: Record<string, string>;
   isDraggingThis: boolean;
-  showDropAbove: boolean;
-  showDropBelow: boolean;
+  activeDragIndex: number | null;
   hoverDropIndex: number | null;
+  draggedCardHeight: number;
+  dragTranslateY: Animated.Value;
   onCardLayout: (e: LayoutChangeEvent) => void;
-  onDragStart: (index: number) => void;
+  onDragStart: (index: number, initialPageY: number) => void;
   onDragMove: (index: number, dy: number, gestureY: number) => void;
   onDragEnd: (fromIndex: number) => void;
   onViewFile: (file: { url: string; fileName: string }) => void;
@@ -230,9 +231,10 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
   reordering,
   authHeaders,
   isDraggingThis,
-  showDropAbove,
-  showDropBelow,
+  activeDragIndex,
   hoverDropIndex,
+  draggedCardHeight,
+  dragTranslateY,
   onCardLayout,
   onDragStart,
   onDragMove,
@@ -247,9 +249,68 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
   isReviewing,
   onReviewFile,
 }) => {
-  const panY = useRef(new Animated.Value(0)).current;
+  const shiftY = useRef(new Animated.Value(0)).current;
   const scaleAnim = useRef(new Animated.Value(1)).current;
   const isDraggingRef = useRef(false);
+
+  // Keep latest props in a ref so PanResponder is created once and NEVER recreated mid-drag
+  const latestPropsRef = useRef({
+    index,
+    isAuditor,
+    totalFiles,
+    onDragStart,
+    onDragMove,
+    onDragEnd,
+  });
+  latestPropsRef.current = {
+    index,
+    isAuditor,
+    totalFiles,
+    onDragStart,
+    onDragMove,
+    onDragEnd,
+  };
+
+  // Compute live displacement for non-dragged cards so they slide out of the way smoothly
+  const targetShift = useMemo(() => {
+    if (
+      activeDragIndex === null ||
+      hoverDropIndex === null ||
+      activeDragIndex === index
+    ) {
+      return 0;
+    }
+    const offset = (draggedCardHeight || 112) + 10;
+    if (
+      activeDragIndex < hoverDropIndex &&
+      index > activeDragIndex &&
+      index <= hoverDropIndex
+    ) {
+      return -offset;
+    }
+    if (
+      activeDragIndex > hoverDropIndex &&
+      index >= hoverDropIndex &&
+      index < activeDragIndex
+    ) {
+      return offset;
+    }
+    return 0;
+  }, [activeDragIndex, hoverDropIndex, index, draggedCardHeight]);
+
+  useEffect(() => {
+    if (activeDragIndex === null) {
+      shiftY.setValue(0);
+      return;
+    }
+    Animated.spring(shiftY, {
+      toValue: targetShift,
+      stiffness: 260,
+      damping: 26,
+      mass: 0.7,
+      useNativeDriver: true,
+    }).start();
+  }, [targetShift, activeDragIndex, shiftY]);
 
   const review = getReviewStatus(file);
   const fileName = getFileName(file);
@@ -264,82 +325,89 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
   const finishDrag = useCallback(() => {
     if (!isDraggingRef.current) return;
     isDraggingRef.current = false;
-    Animated.parallel([
-      Animated.spring(panY, {
-        toValue: 0,
-        friction: 6,
-        useNativeDriver: true,
-      }),
-      Animated.spring(scaleAnim, {
-        toValue: 1,
-        useNativeDriver: true,
-      }),
-    ]).start();
-    onDragEnd(index);
-  }, [index, onDragEnd, panY, scaleAnim]);
+    scaleAnim.setValue(1);
+    latestPropsRef.current.onDragEnd(latestPropsRef.current.index);
+  }, [scaleAnim]);
 
-  const panResponder = useMemo(
-    () =>
-      PanResponder.create({
-        onStartShouldSetPanResponder: () => !isAuditor && totalFiles > 1 && !reordering,
-        onMoveShouldSetPanResponder: (_, gesture) =>
-          !isAuditor && totalFiles > 1 && !reordering && Math.abs(gesture.dy) > 2,
-        onPanResponderTerminationRequest: () => false,
-        onPanResponderGrant: () => {
-          isDraggingRef.current = true;
-          triggerHaptic('medium');
-          onDragStart(index);
-          Animated.parallel([
-            Animated.spring(scaleAnim, {
-              toValue: 1.025,
-              useNativeDriver: true,
-            }),
-          ]).start();
-        },
-        onPanResponderMove: (_, gesture) => {
-          panY.setValue(gesture.dy);
-          onDragMove(index, gesture.dy, gesture.moveY);
-        },
-        onPanResponderRelease: () => {
-          finishDrag();
-        },
-        onPanResponderTerminate: () => {
-          finishDrag();
-        },
-      }),
-    [index, isAuditor, totalFiles, reordering, onDragStart, onDragMove, finishDrag, panY, scaleAnim]
-  );
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () =>
+        !latestPropsRef.current.isAuditor && latestPropsRef.current.totalFiles > 1,
+      onStartShouldSetPanResponderCapture: () =>
+        !latestPropsRef.current.isAuditor && latestPropsRef.current.totalFiles > 1,
+      onMoveShouldSetPanResponder: () =>
+        !latestPropsRef.current.isAuditor && latestPropsRef.current.totalFiles > 1,
+      onMoveShouldSetPanResponderCapture: () =>
+        !latestPropsRef.current.isAuditor && latestPropsRef.current.totalFiles > 1,
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+      onPanResponderGrant: (_, gesture) => {
+        isDraggingRef.current = true;
+        triggerHaptic('medium');
+        latestPropsRef.current.onDragStart(
+          latestPropsRef.current.index,
+          gesture.y0
+        );
+        Animated.spring(scaleAnim, {
+          toValue: 1.03,
+          useNativeDriver: true,
+        }).start();
+      },
+      onPanResponderMove: (_, gesture) => {
+        if (!isDraggingRef.current) return;
+        latestPropsRef.current.onDragMove(
+          latestPropsRef.current.index,
+          gesture.dy,
+          gesture.moveY
+        );
+      },
+      onPanResponderRelease: () => {
+        finishDrag();
+      },
+      onPanResponderTerminate: () => {
+        finishDrag();
+      },
+    })
+  ).current;
+
+  // Compute live preview index badge while dragging
+  const previewNumber = useMemo(() => {
+    if (activeDragIndex === null || hoverDropIndex === null) return index + 1;
+    if (isDraggingThis) return hoverDropIndex + 1;
+    if (
+      activeDragIndex < hoverDropIndex &&
+      index > activeDragIndex &&
+      index <= hoverDropIndex
+    ) {
+      return index;
+    }
+    if (
+      activeDragIndex > hoverDropIndex &&
+      index >= hoverDropIndex &&
+      index < activeDragIndex
+    ) {
+      return index + 2;
+    }
+    return index + 1;
+  }, [activeDragIndex, hoverDropIndex, index, isDraggingThis]);
 
   return (
     <View
       style={{ zIndex: isDraggingThis ? 9999 : 1 }}
       onLayout={onCardLayout}
     >
-      {/* Drop Insertion Line Above */}
-      {showDropAbove ? (
-        <View style={s.dropTargetBarWrap}>
-          <View style={s.dropTargetDot} />
-          <View style={s.dropTargetLine} />
-          <View style={s.dropTargetPill}>
-            <MaterialIcons name="swap-vert" size={13} color="#2563eb" />
-            <Text style={s.dropTargetText}>
-              Drop at #{hoverDropIndex !== null ? hoverDropIndex + 1 : index + 1}
-            </Text>
-          </View>
-          <View style={s.dropTargetLine} />
-          <View style={s.dropTargetDot} />
-        </View>
-      ) : null}
-
       <Animated.View
         style={[
           s.fileCard,
           { borderColor: isDraggingThis ? '#2563eb' : isAuditor ? '#e2e8f0' : review.cardBorder },
           isDraggingThis && s.fileCardDragging,
           {
-            transform: [{ translateY: panY }, { scale: scaleAnim }],
+            transform: [
+              { translateY: isDraggingThis ? dragTranslateY : shiftY },
+              { scale: scaleAnim },
+            ],
             zIndex: isDraggingThis ? 9999 : 1,
-            elevation: isDraggingThis ? 12 : 1,
+            elevation: isDraggingThis ? 16 : 1,
           },
         ]}
       >
@@ -382,7 +450,7 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
           <Text style={[s.fileNumber, isDraggingThis && s.fileNumberDragging]}>
             {isDraggingThis && hoverDropIndex !== null && hoverDropIndex !== index
               ? `Moving #${index + 1} ➔ #${hoverDropIndex + 1}`
-              : `File #${index + 1}`}
+              : `File #${previewNumber}`}
           </Text>
         </View>
 
@@ -396,7 +464,7 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
                 s.dragGripHandle,
                 isDraggingThis && s.dragGripHandleActive,
               ]}
-              hitSlop={{ top: 14, bottom: 14, left: 12, right: 12 }}
+              hitSlop={{ top: 18, bottom: 18, left: 16, right: 16 }}
             >
               <MaterialIcons
                 name="drag-indicator"
@@ -546,22 +614,6 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
           </View>
         ) : null}
       </Animated.View>
-
-      {/* Drop Insertion Line Below */}
-      {showDropBelow ? (
-        <View style={s.dropTargetBarWrap}>
-          <View style={s.dropTargetDot} />
-          <View style={s.dropTargetLine} />
-          <View style={s.dropTargetPill}>
-            <MaterialIcons name="swap-vert" size={13} color="#2563eb" />
-            <Text style={s.dropTargetText}>
-              Drop at #{hoverDropIndex !== null ? hoverDropIndex + 1 : index + 1}
-            </Text>
-          </View>
-          <View style={s.dropTargetLine} />
-          <View style={s.dropTargetDot} />
-        </View>
-      ) : null}
     </View>
   );
 };
@@ -600,10 +652,21 @@ export default function EvidenceFilesPanel({
   // Drag and drop state
   const [activeDragIndex, setActiveDragIndex] = useState<number | null>(null);
   const [hoverDropIndex, setHoverDropIndex] = useState<number | null>(null);
+  const activeDragIndexRef = useRef<number | null>(null);
   const hoverDropIndexRef = useRef<number | null>(null);
   const cardLayoutsRef = useRef<{ [key: number]: { y: number; height: number } }>({});
+  const frozenLayoutsRef = useRef<{ [key: number]: { y: number; height: number } }>({});
   const scrollViewRef = useRef<ScrollView>(null);
   const scrollOffsetRef = useRef<number>(0);
+  const dragStartScrollYRef = useRef<number>(0);
+  const lastGestureDyRef = useRef<number>(0);
+  const lastMoveYRef = useRef<number>(0);
+  const contentHeightRef = useRef<number>(0);
+  const scrollViewHeightRef = useRef<number>(0);
+  const dragTranslateY = useRef(new Animated.Value(0)).current;
+  const lastReorderTimestampRef = useRef<number>(0);
+  const filesRef = useRef<EvidenceFile[]>([]);
+  filesRef.current = files;
 
   const requirementId =
     requirement?.RequirementID ||
@@ -712,8 +775,12 @@ export default function EvidenceFilesPanel({
             )
           : rawList;
 
-        // If user is actively dragging cards or renaming, do not overwrite list
-        if (isDraggingActiveRef.current || isEditingActiveRef.current) {
+        // If user is actively dragging cards, renaming, or just reordered within the last 4s, do not overwrite list
+        if (
+          isDraggingActiveRef.current ||
+          isEditingActiveRef.current ||
+          Date.now() - lastReorderTimestampRef.current < 4000
+        ) {
           return;
         }
 
@@ -876,93 +943,199 @@ export default function EvidenceFilesPanel({
   };
 
   // Reorder file position
-  const handleMoveFile = async (fromIndex: number, toIndex: number) => {
-    if (toIndex < 0 || toIndex >= files.length || reordering) return;
-    const nextFiles = [...files];
-    const [moved] = nextFiles.splice(fromIndex, 1);
-    nextFiles.splice(toIndex, 0, moved);
+  const handleMoveFile = useCallback(
+    async (fromIndex: number, toIndex: number) => {
+      const currentList = filesRef.current;
+      if (
+        fromIndex === toIndex ||
+        toIndex < 0 ||
+        toIndex >= currentList.length
+      ) {
+        return;
+      }
+      const nextFiles = [...currentList];
+      const [moved] = nextFiles.splice(fromIndex, 1);
+      nextFiles.splice(toIndex, 0, moved);
 
-    // Immediate local UI update
-    setFiles(nextFiles);
+      // Protect against in-flight polling overwriting the new order
+      lastReorderTimestampRef.current = Date.now();
 
-    const orderedIds = nextFiles.map((f) => Number(f.id)).filter(Boolean);
-    const targetUserId = currentUserId || moved.uploadedby || moved.userId || '0';
+      // Immediate local UI update
+      filesRef.current = nextFiles;
+      setFiles(nextFiles);
 
-    try {
-      setReordering(true);
-      await requirementsAPI.reorderFiles(requirementId, targetUserId, orderedIds);
-      onRefreshRequirements?.();
-    } catch (err: any) {
-      console.error('Failed to reorder files:', err);
-      Alert.alert('Reorder Failed', err?.message || 'Could not update file order.');
-      await loadFiles();
-    } finally {
-      setReordering(false);
+      const orderedIds = nextFiles.map((f) => Number(f.id)).filter(Boolean);
+      const targetUserId =
+        (isAuditor || isAdmin
+          ? selectedSubmitterId || currentUserId
+          : currentUserId) ||
+        moved?.uploadedby ||
+        moved?.userId ||
+        '0';
+
+      try {
+        setReordering(true);
+        await requirementsAPI.reorderFiles(requirementId, targetUserId, orderedIds);
+        lastReorderTimestampRef.current = Date.now();
+        onRefreshRequirementsRef.current?.();
+      } catch (err: any) {
+        console.error('Failed to reorder files:', err);
+        Alert.alert('Reorder Failed', err?.message || 'Could not update file order.');
+        await loadFiles();
+      } finally {
+        setReordering(false);
+      }
+    },
+    [isAuditor, isAdmin, selectedSubmitterId, currentUserId, requirementId, loadFiles]
+  );
+
+  // Recalculate dragged card translation and target drop slot using frozen initial layouts
+  const recalculateDragTarget = useCallback((fromIndex: number) => {
+    const count = filesRef.current.length;
+    if (count <= 1) return;
+
+    const scrollDelta = scrollOffsetRef.current - dragStartScrollYRef.current;
+    const totalDy = lastGestureDyRef.current + scrollDelta;
+    dragTranslateY.setValue(totalDy);
+
+    const startLayout = frozenLayoutsRef.current[fromIndex];
+    const startY = startLayout ? startLayout.y : fromIndex * 120;
+    const cardHeight = startLayout ? startLayout.height : 108;
+    const currentCenterY = startY + cardHeight / 2 + totalDy;
+
+    let closestIndex = fromIndex;
+    let minDistance = Infinity;
+
+    for (let i = 0; i < count; i++) {
+      const layout = frozenLayoutsRef.current[i];
+      const targetCenterY = layout ? layout.y + layout.height / 2 : i * 120 + 54;
+      const dist = Math.abs(currentCenterY - targetCenterY);
+      if (dist < minDistance) {
+        minDistance = dist;
+        closestIndex = i;
+      }
     }
-  };
+
+    // Clamp if dragged above first card or below last card
+    const firstLayout = frozenLayoutsRef.current[0];
+    const lastLayout = frozenLayoutsRef.current[count - 1];
+    if (firstLayout && currentCenterY <= firstLayout.y + firstLayout.height / 2) {
+      closestIndex = 0;
+    } else if (lastLayout && currentCenterY >= lastLayout.y + lastLayout.height / 2) {
+      closestIndex = count - 1;
+    }
+
+    if (closestIndex !== hoverDropIndexRef.current) {
+      hoverDropIndexRef.current = closestIndex;
+      setHoverDropIndex(closestIndex);
+      triggerHaptic('light');
+    }
+  }, [dragTranslateY]);
+
+  // Continuous 60fps auto-scroll while holding dragged item near top or bottom of screen
+  useEffect(() => {
+    if (activeDragIndex === null) return;
+
+    const windowHeight = Dimensions.get('window').height;
+    const topEdgeThreshold = 240;
+    const bottomEdgeThreshold = windowHeight - 180;
+
+    const autoScrollTimer = setInterval(() => {
+      const fromIdx = activeDragIndexRef.current;
+      if (fromIdx === null) return;
+
+      const moveY = lastMoveYRef.current;
+      if (moveY <= 0) return;
+
+      if (moveY < topEdgeThreshold && scrollOffsetRef.current > 0) {
+        const intensity = Math.min(
+          1,
+          Math.max(0.2, (topEdgeThreshold - moveY) / 140)
+        );
+        const step = Math.round(intensity * 20);
+        const nextY = Math.max(0, scrollOffsetRef.current - step);
+        if (nextY !== scrollOffsetRef.current) {
+          scrollOffsetRef.current = nextY;
+          scrollViewRef.current?.scrollTo({ y: nextY, animated: false });
+          recalculateDragTarget(fromIdx);
+        }
+      } else if (moveY > bottomEdgeThreshold) {
+        const maxScroll = Math.max(
+          0,
+          contentHeightRef.current - scrollViewHeightRef.current
+        );
+        if (scrollOffsetRef.current < maxScroll) {
+          const intensity = Math.min(
+            1,
+            Math.max(0.2, (moveY - bottomEdgeThreshold) / 140)
+          );
+          const step = Math.round(intensity * 20);
+          const nextY = Math.min(maxScroll, scrollOffsetRef.current + step);
+          if (nextY !== scrollOffsetRef.current) {
+            scrollOffsetRef.current = nextY;
+            scrollViewRef.current?.scrollTo({ y: nextY, animated: false });
+            recalculateDragTarget(fromIdx);
+          }
+        }
+      }
+    }, 16);
+
+    return () => clearInterval(autoScrollTimer);
+  }, [activeDragIndex, recalculateDragTarget]);
 
   // Drag-and-drop callbacks for 2x3 grip reordering
-  const handleDragStart = useCallback((index: number) => {
-    setActiveDragIndex(index);
-    setHoverDropIndex(index);
-    hoverDropIndexRef.current = index;
-  }, []);
+  const handleDragStart = useCallback(
+    (index: number, initialPageY: number) => {
+      // Freeze card layouts at the start of drag so layout shifts never cause oscillation
+      const snapshot: { [key: number]: { y: number; height: number } } = {};
+      Object.keys(cardLayoutsRef.current).forEach((k) => {
+        const numKey = Number(k);
+        const item = cardLayoutsRef.current[numKey];
+        if (item) {
+          snapshot[numKey] = { y: item.y, height: item.height };
+        }
+      });
+      frozenLayoutsRef.current = snapshot;
+      dragStartScrollYRef.current = scrollOffsetRef.current;
+      lastGestureDyRef.current = 0;
+      lastMoveYRef.current = initialPageY;
+      dragTranslateY.setValue(0);
+
+      activeDragIndexRef.current = index;
+      hoverDropIndexRef.current = index;
+      setActiveDragIndex(index);
+      setHoverDropIndex(index);
+    },
+    [dragTranslateY]
+  );
 
   const handleDragMove = useCallback(
     (index: number, dy: number, gestureY: number) => {
-      const windowHeight = Dimensions.get('window').height;
-      if (gestureY < 180 && scrollOffsetRef.current > 0) {
-        scrollViewRef.current?.scrollTo({
-          y: Math.max(0, scrollOffsetRef.current - 12),
-          animated: false,
-        });
-      } else if (gestureY > windowHeight - 160) {
-        scrollViewRef.current?.scrollTo({
-          y: scrollOffsetRef.current + 12,
-          animated: false,
-        });
-      }
-
-      const activeLayout = cardLayoutsRef.current[index];
-      const startY = activeLayout?.y ?? index * 120;
-      const cardHeight = activeLayout?.height ?? 100;
-      const currentCenterY = startY + cardHeight / 2 + dy;
-
-      let closestIndex = index;
-      let minDistance = Infinity;
-
-      for (let i = 0; i < files.length; i++) {
-        const layout = cardLayoutsRef.current[i];
-        const targetCenterY = layout ? layout.y + layout.height / 2 : i * 120 + 60;
-        const dist = Math.abs(currentCenterY - targetCenterY);
-        if (dist < minDistance) {
-          minDistance = dist;
-          closestIndex = i;
-        }
-      }
-
-      if (closestIndex !== hoverDropIndexRef.current) {
-        hoverDropIndexRef.current = closestIndex;
-        setHoverDropIndex(closestIndex);
-        triggerHaptic('light');
-      }
+      if (activeDragIndexRef.current !== index) return;
+      lastGestureDyRef.current = dy;
+      lastMoveYRef.current = gestureY;
+      recalculateDragTarget(index);
     },
-    [files.length]
+    [recalculateDragTarget]
   );
 
   const handleDragEnd = useCallback(
     (fromIndex: number) => {
       const toIndex = hoverDropIndexRef.current ?? fromIndex;
+      activeDragIndexRef.current = null;
+      hoverDropIndexRef.current = null;
+      lastGestureDyRef.current = 0;
+      lastMoveYRef.current = 0;
+      dragTranslateY.setValue(0);
       setActiveDragIndex(null);
       setHoverDropIndex(null);
-      hoverDropIndexRef.current = null;
 
       if (toIndex !== fromIndex) {
         triggerHaptic('success');
         void handleMoveFile(fromIndex, toIndex);
       }
     },
-    [handleMoveFile]
+    [dragTranslateY, handleMoveFile]
   );
 
   // Confirm rename
@@ -1185,6 +1358,12 @@ export default function EvidenceFilesPanel({
             style={{ flex: 1 }}
             contentContainerStyle={{ padding: 14, paddingBottom: 100 }}
             scrollEnabled={activeDragIndex === null}
+            onLayout={(e) => {
+              scrollViewHeightRef.current = e.nativeEvent.layout.height;
+            }}
+            onContentSizeChange={(_, h) => {
+              contentHeightRef.current = h;
+            }}
             onScroll={(e) => {
               scrollOffsetRef.current = e.nativeEvent.contentOffset.y;
             }}
@@ -1212,19 +1391,18 @@ export default function EvidenceFilesPanel({
                   reordering={reordering}
                   authHeaders={authHeaders}
                   isDraggingThis={activeDragIndex === index}
-                  showDropAbove={
-                    activeDragIndex !== null &&
-                    hoverDropIndex === index &&
-                    hoverDropIndex < activeDragIndex
-                  }
-                  showDropBelow={
-                    activeDragIndex !== null &&
-                    hoverDropIndex === index &&
-                    hoverDropIndex > activeDragIndex
-                  }
+                  activeDragIndex={activeDragIndex}
                   hoverDropIndex={hoverDropIndex}
+                  draggedCardHeight={
+                    activeDragIndex !== null
+                      ? frozenLayoutsRef.current[activeDragIndex]?.height ?? 112
+                      : 112
+                  }
+                  dragTranslateY={dragTranslateY}
                   onCardLayout={(e) => {
-                    cardLayoutsRef.current[index] = e.nativeEvent.layout;
+                    if (activeDragIndexRef.current === null) {
+                      cardLayoutsRef.current[index] = e.nativeEvent.layout;
+                    }
                   }}
                   onDragStart={handleDragStart}
                   onDragMove={handleDragMove}
