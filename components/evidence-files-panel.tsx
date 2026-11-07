@@ -199,6 +199,7 @@ type DraggableFileCardProps = {
   index: number;
   totalFiles: number;
   isAuditor: boolean;
+  isAdmin: boolean;
   reordering: boolean;
   authHeaders: Record<string, string>;
   isDraggingThis: boolean;
@@ -225,6 +226,7 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
   index,
   totalFiles,
   isAuditor,
+  isAdmin,
   reordering,
   authHeaders,
   isDraggingThis,
@@ -332,7 +334,7 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
       <Animated.View
         style={[
           s.fileCard,
-          { borderColor: isDraggingThis ? '#2563eb' : review.cardBorder },
+          { borderColor: isDraggingThis ? '#2563eb' : isAuditor ? '#e2e8f0' : review.cardBorder },
           isDraggingThis && s.fileCardDragging,
           {
             transform: [{ translateY: panY }, { scale: scaleAnim }],
@@ -341,26 +343,42 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
           },
         ]}
       >
-        {/* Top Row: Review status badge + File # index */}
+        {/* Top Row: Review status badge (Hidden for External Auditors, replaced with Standard pill) + File # index */}
         <View style={s.fileCardTopRow}>
-          <View
-            style={[
-              s.reviewBadge,
-              {
-                backgroundColor: review.bgColor,
-                borderColor: review.borderColor,
-              },
-            ]}
-          >
-            <MaterialIcons
-              name={review.icon}
-              size={13}
-              color={review.color}
-            />
-            <Text style={[s.reviewBadgeText, { color: review.color }]}>
-              {review.label}
-            </Text>
-          </View>
+          {!isAuditor ? (
+            <View
+              style={[
+                s.reviewBadge,
+                {
+                  backgroundColor: review.bgColor,
+                  borderColor: review.borderColor,
+                },
+              ]}
+            >
+              <MaterialIcons
+                name={review.icon}
+                size={13}
+                color={review.color}
+              />
+              <Text style={[s.reviewBadgeText, { color: review.color }]}>
+                {review.label}
+              </Text>
+            </View>
+          ) : (
+            <View
+              style={[
+                s.reviewBadge,
+                {
+                  backgroundColor: '#f1f5f9',
+                  borderColor: '#e2e8f0',
+                },
+              ]}
+            >
+              <Text style={[s.reviewBadgeText, { color: '#475569' }]}>
+                Standard
+              </Text>
+            </View>
+          )}
           <Text style={[s.fileNumber, isDraggingThis && s.fileNumberDragging]}>
             {isDraggingThis && hoverDropIndex !== null && hoverDropIndex !== index
               ? `Moving #${index + 1} ➔ #${hoverDropIndex + 1}`
@@ -386,18 +404,18 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
                 color={isDraggingThis ? '#2563eb' : '#94a3b8'}
               />
             </View>
-          ) : (
+          ) : !isAuditor ? (
             <View style={s.dragGripHandleDisabled}>
               <MaterialIcons name="drag-indicator" size={20} color="#cbd5e1" />
             </View>
-          )}
+          ) : null}
 
           {/* Real Image / File Thumbnail */}
           <TouchableOpacity
             style={[
               s.thumbnailBox,
-              review.statusKey === 'approved' && s.thumbnailApprovedBorder,
-              review.statusKey === 'rejected' && s.thumbnailRejectedBorder,
+              !isAuditor && review.statusKey === 'approved' && s.thumbnailApprovedBorder,
+              !isAuditor && review.statusKey === 'rejected' && s.thumbnailRejectedBorder,
             ]}
             onPress={() => onViewFile({ url: fileUrl, fileName })}
             activeOpacity={0.8}
@@ -457,47 +475,52 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
           ) : null}
         </View>
 
-        {/* Feedback / Note Box */}
-        {review.statusKey === 'rejected' ? (
-          <View style={s.revisionFeedbackBox}>
-            <View style={s.revisionFeedbackHeader}>
-              <MaterialIcons name="warning" size={14} color="#dc2626" />
-              <Text style={s.revisionFeedbackTitle}>Auditor Revision Feedback:</Text>
+        {/* Feedback / Note Box (Hidden for External Auditors matching web UserFilesGridModal.jsx) */}
+        {!isAuditor && (
+          review.statusKey === 'rejected' ? (
+            <View style={s.revisionFeedbackBox}>
+              <View style={s.revisionFeedbackHeader}>
+                <MaterialIcons name="warning" size={14} color="#dc2626" />
+                <Text style={s.revisionFeedbackTitle}>Rejection Reason / Revision Note:</Text>
+              </View>
+              <Text style={s.revisionFeedbackContent}>
+                {rejectionReason || fileComment || 'Needs revision (no comment provided)'}
+              </Text>
+              {reviewer ? (
+                <Text style={s.reviewedByText}>Reviewed by: {reviewer}</Text>
+              ) : null}
             </View>
-            <Text style={s.revisionFeedbackContent}>
-              {rejectionReason || fileComment || 'Please revise this evidence document.'}
-            </Text>
-            {reviewer ? (
-              <Text style={s.reviewedByText}>Reviewed by: {reviewer}</Text>
-            ) : null}
-          </View>
-        ) : review.statusKey === 'approved' ? (
-          <View style={s.auditorNoteBox}>
-            <Text style={s.auditorNoteTitle}>Auditor Note:</Text>
-            <Text style={s.auditorNoteContent}>
-              {fileComment || 'Evidence document approved.'}
-            </Text>
-          </View>
-        ) : (
-          <View style={s.pendingCommentBox}>
-            <Text style={s.pendingCommentTitle}>Comment:</Text>
-            <Text
-              style={[
-                s.pendingCommentContent,
-                !fileComment && s.italicMutedText,
-              ]}
-            >
-              {fileComment || 'No comment from auditor'}
-            </Text>
-          </View>
+          ) : review.statusKey === 'approved' ? (
+            <View style={s.auditorNoteBox}>
+              <Text style={s.auditorNoteTitle}>Auditor Note:</Text>
+              <Text style={s.auditorNoteContent}>
+                {fileComment || 'No comment from auditor'}
+              </Text>
+              {reviewer ? (
+                <Text style={[s.reviewedByText, { color: '#64748b' }]}>Reviewed by: {reviewer}</Text>
+              ) : null}
+            </View>
+          ) : (
+            <View style={s.pendingCommentBox}>
+              <Text style={s.pendingCommentTitle}>Auditor Note / Comment:</Text>
+              <Text
+                style={[
+                  s.pendingCommentContent,
+                  !fileComment && s.italicMutedText,
+                ]}
+              >
+                {fileComment || 'No comment from auditor'}
+              </Text>
+            </View>
+          )
         )}
 
-        {/* Auditor Action Controls (if external auditor) */}
-        {isAuditor ? (
+        {/* Admin Review Action Controls (Approve / Reject only for Admin, hidden for External Auditors) */}
+        {isAdmin && !isAuditor ? (
           <View style={s.auditorReviewRow}>
             <TextInput
               style={s.auditorCommentInput}
-              placeholder="Add auditor feedback note..."
+              placeholder="Add feedback or revision note..."
               placeholderTextColor="#94a3b8"
               value={commentInput ?? ''}
               onChangeText={onChangeComment}
@@ -513,11 +536,11 @@ const DraggableFileCard: React.FC<DraggableFileCardProps> = ({
               </TouchableOpacity>
               <TouchableOpacity
                 style={s.rejectBtn}
-                onPress={() => onReviewFile(file, 'needs_revision')}
+                onPress={() => onReviewFile(file, 'rejected')}
                 disabled={isReviewing}
               >
                 <MaterialIcons name="close" size={14} color="#dc2626" />
-                <Text style={s.rejectBtnText}>Needs Revision</Text>
+                <Text style={s.rejectBtnText}>Reject</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -595,10 +618,17 @@ export default function EvidenceFilesPanel({
   const currentUserId = Number(
     currentUser?.userid ?? currentUser?.id ?? currentUser?.UserID ?? 0
   );
+  const isAdmin = Boolean(
+    currentUser?.isAdmin ||
+      Number(currentUser?.roleid ?? currentUser?.RoleID ?? 0) === 1 ||
+      String(currentUser?.rolename ?? currentUser?.RoleName ?? '')
+        .toLowerCase()
+        .includes('admin')
+  );
 
-  // For Auditor: load assigned personnel who submitted files
+  // For Auditor or Admin: load assigned personnel who submitted files
   useEffect(() => {
-    if (!visible || !isAuditor || !requirementId) return;
+    if (!visible || (!isAuditor && !isAdmin) || !requirementId) return;
     let mounted = true;
     requirementsAPI
       .getAssignedUsers(requirementId, officeId)
@@ -613,7 +643,12 @@ export default function EvidenceFilesPanel({
           : [];
         setAssignedSubmitters(list);
         if (list.length > 0) {
-          const uploader = list.find((u: any) => u.hasuploaded || u.has_uploaded);
+          const uploader = list.find((u: any) =>
+            isAuditor
+              ? Number(u.approvedcount ?? u.totalfiles ?? 0) > 0 &&
+                (u.hasuploaded || u.has_uploaded)
+              : u.hasuploaded || u.has_uploaded
+          );
           const firstId = Number(
             uploader
               ? uploader.userid || uploader.id
@@ -626,7 +661,7 @@ export default function EvidenceFilesPanel({
     return () => {
       mounted = false;
     };
-  }, [visible, isAuditor, requirementId, officeId]);
+  }, [visible, isAuditor, isAdmin, requirementId, officeId]);
 
   const isDraggingActiveRef = useRef(false);
   isDraggingActiveRef.current = activeDragIndex !== null || reordering;
@@ -637,7 +672,7 @@ export default function EvidenceFilesPanel({
   const loadFiles = useCallback(
     async (options?: { silent?: boolean }) => {
       if (!requirementId) return;
-      const targetUserId = isAuditor
+      const targetUserId = isAuditor || isAdmin
         ? selectedSubmitterId || currentUserId
         : currentUserId;
       if (!targetUserId) return;
@@ -653,11 +688,21 @@ export default function EvidenceFilesPanel({
           String(targetUserId),
           officeId
         );
-        const list: EvidenceFile[] = Array.isArray(res?.files)
+        const rawList: EvidenceFile[] = Array.isArray(res?.files)
           ? res.files
           : res?.file
           ? [res.file]
           : [];
+
+        // External Auditors are restricted to viewing ONLY approved files (matching web commit de3e8456)
+        const list: EvidenceFile[] = isAuditor
+          ? rawList.filter(
+              (f) =>
+                f &&
+                String(f.reviewstatus || f.review_status || f.reviewStatus || '').toLowerCase() ===
+                  'approved'
+            )
+          : rawList;
 
         // If user is actively dragging cards or renaming, do not overwrite list
         if (isDraggingActiveRef.current || isEditingActiveRef.current) {
@@ -700,7 +745,7 @@ export default function EvidenceFilesPanel({
         }
       }
     },
-    [requirementId, currentUserId, isAuditor, selectedSubmitterId, officeId, onRefreshRequirements]
+    [requirementId, currentUserId, isAuditor, isAdmin, selectedSubmitterId, officeId, onRefreshRequirements]
   );
 
   useEffect(() => {
@@ -740,34 +785,49 @@ export default function EvidenceFilesPanel({
 
   // ─── Actions ───────────────────────────────────────────
 
-  // Pick and upload new file
+  // Pick and upload new file(s) (Supports multiple file selection matching Web YourWorkFileUpload.jsx)
   const handlePickAndUploadFile = async () => {
     if (uploading || !requirementId) return;
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: '*/*',
         copyToCacheDirectory: true,
-        multiple: false,
+        multiple: true,
       });
 
       if (res.canceled || !res.assets || res.assets.length === 0) return;
 
-      const asset = res.assets[0];
+      const remainingSlots = Math.max(0, maxFiles - files.length);
+      const selectedAssets = res.assets.slice(0, remainingSlots);
+      if (selectedAssets.length === 0) {
+        Alert.alert('Limit Reached', `Maximum of ${maxFiles} standard files allowed.`);
+        return;
+      }
+
       setUploading(true);
 
-      await requirementsAPI.uploadUserFile({
-        fileUri: asset.uri,
-        fileName: asset.name,
-        mimeType: asset.mimeType || 'application/octet-stream',
-        requirementId: requirementId,
-        userId: currentUserId,
-        officeId: officeId,
-        displayName: asset.name,
-      });
+      let uploadedCountNow = 0;
+      for (const asset of selectedAssets) {
+        await requirementsAPI.uploadUserFile({
+          fileUri: asset.uri,
+          fileName: asset.name,
+          mimeType: asset.mimeType || 'application/octet-stream',
+          requirementId: requirementId,
+          userId: currentUserId,
+          officeId: officeId,
+          displayName: asset.name,
+        });
+        uploadedCountNow++;
+      }
 
       await loadFiles();
       onRefreshRequirements?.();
-      Alert.alert('Upload Complete', `"${asset.name}" has been uploaded.`);
+      Alert.alert(
+        'Upload Complete',
+        uploadedCountNow === 1
+          ? `"${selectedAssets[0].name}" has been uploaded.`
+          : `${uploadedCountNow} standard files have been uploaded.`
+      );
     } catch (err: any) {
       console.error('Error uploading file:', err);
       Alert.alert('Upload Failed', err?.message || 'Could not upload file.');
@@ -972,35 +1032,45 @@ export default function EvidenceFilesPanel({
             </Text>
             <View style={s.headerSubtitleRow}>
               <Text style={s.standardFilesLabel}>Standard Files</Text>
-              <View style={s.uploadedCountPill}>
-                <Text style={s.uploadedCountPillText}>
-                  {uploadedCount}/{maxFiles} uploaded
-                </Text>
-              </View>
-              {uploadedCount > 0 && (
-                <View
-                  style={[
-                    s.approvedCountPill,
-                    approvedCount === uploadedCount && {
-                      backgroundColor: '#ecfdf5',
-                      borderColor: '#a7f3d0',
-                    },
-                  ]}
-                >
-                  <Text
-                    style={[
-                      s.approvedCountPillText,
-                      approvedCount === uploadedCount && { color: '#059669' },
-                    ]}
-                  >
-                    {approvedCount}/{uploadedCount} Approved
-                  </Text>
-                </View>
-              )}
-              {rejectedCount > 0 && (
-                <View style={s.rejectedCountPill}>
-                  <Text style={s.rejectedCountPillText}>
-                    Needs Revision ({rejectedCount})
+              {!isAuditor ? (
+                <>
+                  <View style={s.uploadedCountPill}>
+                    <Text style={s.uploadedCountPillText}>
+                      {uploadedCount}/{maxFiles} uploaded
+                    </Text>
+                  </View>
+                  {uploadedCount > 0 && (
+                    <View
+                      style={[
+                        s.approvedCountPill,
+                        approvedCount === uploadedCount && {
+                          backgroundColor: '#ecfdf5',
+                          borderColor: '#a7f3d0',
+                        },
+                      ]}
+                    >
+                      <Text
+                        style={[
+                          s.approvedCountPillText,
+                          approvedCount === uploadedCount && { color: '#059669' },
+                        ]}
+                      >
+                        {approvedCount}/{uploadedCount} Approved
+                      </Text>
+                    </View>
+                  )}
+                  {rejectedCount > 0 && (
+                    <View style={s.rejectedCountPill}>
+                      <Text style={s.rejectedCountPillText}>
+                        Needs Revision ({rejectedCount})
+                      </Text>
+                    </View>
+                  )}
+                </>
+              ) : (
+                <View style={[s.uploadedCountPill, { backgroundColor: '#f1f5f9', borderColor: '#e2e8f0' }]}>
+                  <Text style={[s.uploadedCountPillText, { color: '#475569' }]}>
+                    {uploadedCount} {uploadedCount === 1 ? 'file' : 'files'}
                   </Text>
                 </View>
               )}
@@ -1008,8 +1078,24 @@ export default function EvidenceFilesPanel({
           </View>
         </View>
 
-        {/* ─── Auditor Submitter Selector ─── */}
-        {isAuditor && assignedSubmitters.length > 0 ? (
+        {/* ─── Indeterminate Upload Progress Banner (Matching Web UserFilesGridModal.jsx) ─── */}
+        {uploading && (
+          <View style={s.uploadingBanner}>
+            <View style={s.uploadingBannerRow}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <ActivityIndicator size="small" color="#2563eb" />
+                <Text style={s.uploadingBannerTitle}>Uploading standard file(s)...</Text>
+              </View>
+              <Text style={s.uploadingBannerSub}>Please wait</Text>
+            </View>
+            <View style={s.uploadingProgressTrack}>
+              <View style={s.uploadingProgressFill} />
+            </View>
+          </View>
+        )}
+
+        {/* ─── Submitter Selector (For Auditor or Admin) ─── */}
+        {(isAuditor || isAdmin) && assignedSubmitters.length > 0 ? (
           <View style={s.submittersBar}>
             <Text style={s.submittersLabel}>
               Assigned Personnel ({assignedSubmitters.length})
@@ -1022,8 +1108,11 @@ export default function EvidenceFilesPanel({
                   `${sub.firstname || ''} ${sub.lastname || ''}`.trim() ||
                   sub.Email ||
                   `User #${subId}`;
-                const hasUploaded = sub.hasuploaded || sub.has_uploaded;
-                const hasRejected = sub.hasrejected || Number(sub.rejectedcount) > 0;
+                const hasUploaded = isAuditor
+                  ? Number(sub.approvedcount ?? sub.totalfiles ?? 0) > 0 &&
+                    (sub.hasuploaded || sub.has_uploaded)
+                  : sub.hasuploaded || sub.has_uploaded;
+                const hasRejected = !isAuditor && (sub.hasrejected || Number(sub.rejectedcount) > 0);
 
                 return (
                   <TouchableOpacity
@@ -1036,7 +1125,9 @@ export default function EvidenceFilesPanel({
                   >
                     <MaterialIcons
                       name={
-                        hasRejected
+                        isAuditor
+                          ? 'person'
+                          : hasRejected
                           ? 'error'
                           : hasUploaded
                           ? 'check-circle'
@@ -1046,6 +1137,8 @@ export default function EvidenceFilesPanel({
                       color={
                         isSelected
                           ? '#ffffff'
+                          : isAuditor
+                          ? '#64748b'
                           : hasRejected
                           ? '#dc2626'
                           : hasUploaded
@@ -1104,6 +1197,7 @@ export default function EvidenceFilesPanel({
                   index={index}
                   totalFiles={files.length}
                   isAuditor={isAuditor}
+                  isAdmin={isAdmin}
                   reordering={reordering}
                   authHeaders={authHeaders}
                   isDraggingThis={activeDragIndex === index}
@@ -1300,6 +1394,42 @@ const s = StyleSheet.create({
     borderBottomColor: '#e2e8f0',
     paddingHorizontal: 16,
     paddingVertical: 8,
+  },
+  uploadingBanner: {
+    backgroundColor: '#eff6ff',
+    borderBottomWidth: 1,
+    borderBottomColor: '#dbeafe',
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+  },
+  uploadingBannerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 6,
+  },
+  uploadingBannerTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#1d4ed8',
+  },
+  uploadingBannerSub: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  uploadingProgressTrack: {
+    height: 5,
+    width: '100%',
+    backgroundColor: '#dbeafe',
+    borderRadius: 999,
+    overflow: 'hidden',
+  },
+  uploadingProgressFill: {
+    height: '100%',
+    width: '65%',
+    backgroundColor: '#2563eb',
+    borderRadius: 999,
   },
   submittersLabel: {
     fontSize: 10,

@@ -21,6 +21,7 @@ import {
   areasAPI,
   departmentsAPI,
   eventsAPI,
+  getDeadlineInfo,
   getProfilePicUrl,
   getStoredUser,
   normalizeUser,
@@ -1061,6 +1062,31 @@ export default function ProgramsAndOfficesScreen() {
             <Text style={s.activeEventCode}>
               {selectedEvent?.eventcode || selectedEvent?.eventname || 'PACUCOA 2027'}
             </Text>
+            {(() => {
+              const dl = getDeadlineInfo(selectedEvent?.deadline, selectedEvent);
+              if (!dl.hasDeadline && dl.status === 'none') return null;
+              return (
+                <View
+                  style={{
+                    flexDirection: 'row',
+                    alignItems: 'center',
+                    gap: 3,
+                    backgroundColor: dl.bgColor,
+                    borderColor: dl.borderColor,
+                    borderWidth: 1,
+                    borderRadius: 10,
+                    paddingHorizontal: 6,
+                    paddingVertical: 1,
+                    marginLeft: 6,
+                  }}
+                >
+                  <MaterialIcons name="schedule" size={10} color={dl.textColor} />
+                  <Text style={{ fontSize: 9, fontWeight: '700', color: dl.textColor }}>
+                    {dl.shortLabel}
+                  </Text>
+                </View>
+              );
+            })()}
             {events.length > 1 && (
               <MaterialIcons name="arrow-drop-down" size={18} color="#1e40af" />
             )}
@@ -1160,7 +1186,7 @@ export default function ProgramsAndOfficesScreen() {
                     {/* Department Programs Grid / List */}
                     <View style={s.deptProgramsContainer}>
                       {deptGroup.programs.map((office) =>
-                        renderOfficeCard(office, viewMode, openOfficeInspection)
+                        renderOfficeCard(office, viewMode, openOfficeInspection, officeAuditorsMap)
                       )}
                     </View>
                   </View>
@@ -1201,7 +1227,7 @@ export default function ProgramsAndOfficesScreen() {
                   {/* Non-Academic Programs Grid / List */}
                   <View style={s.deptProgramsContainer}>
                     {nonAcademicOffices.map((office) =>
-                      renderOfficeCard(office, viewMode, openOfficeInspection)
+                      renderOfficeCard(office, viewMode, openOfficeInspection, officeAuditorsMap)
                     )}
                   </View>
                 </View>
@@ -1260,6 +1286,25 @@ export default function ProgramsAndOfficesScreen() {
                     </Text>
                   </View>
                 ) : null}
+                {(() => {
+                  const dl = getDeadlineInfo(
+                    selectedOfficeForInspection?.deadline || selectedEvent?.deadline,
+                    selectedOfficeForInspection
+                  );
+                  return (
+                    <View
+                      style={[
+                        s.tagBadgePill,
+                        { backgroundColor: dl.bgColor, borderColor: dl.borderColor, flexDirection: 'row', alignItems: 'center', gap: 3 },
+                      ]}
+                    >
+                      <MaterialIcons name="schedule" size={10} color={dl.textColor} />
+                      <Text style={[s.tagBadgePillText, { color: dl.textColor, fontWeight: '700' }]}>
+                        {dl.shortLabel}
+                      </Text>
+                    </View>
+                  );
+                })()}
               </View>
             </View>
 
@@ -1622,12 +1667,14 @@ export default function ProgramsAndOfficesScreen() {
                                     const reqId = Number(req.requirementid);
                                     const sId = Number(req.ComplianceStatusID ?? req.status ?? 3);
                                     const assignedPersonnel = assignedUsersMap[reqId] || [];
-                                    const hasRejected = assignedPersonnel.some(
-                                      (u: any) => u.hasrejected === true || Number(u.rejectedcount) > 0
-                                    );
+                                    const hasRejected =
+                                      !isAuditor &&
+                                      assignedPersonnel.some(
+                                        (u: any) => u.hasrejected === true || Number(u.rejectedcount) > 0
+                                      );
                                     const isExpanded = expandedReqIds.has(reqId);
                                     const desc = req.Description || req.description || '';
-                                    const shouldShowToggle = desc.length > 110;
+                                    const shouldShowToggle = desc.length > 90 || isExpanded;
 
                                     return (
                                       <TouchableOpacity
@@ -1679,7 +1726,7 @@ export default function ProgramsAndOfficesScreen() {
                                             </View>
                                           </View>
 
-                                          {/* Center Column: Code, Active / Needs Revision pills, Description, Show more */}
+                                          {/* Center Column: Code, Active / Needs Revision pills, Show more inline, Description */}
                                           <View style={s.standardContentCol}>
                                             <View style={s.standardCodeBadgesRow}>
                                               <Text style={s.standardCodeText}>
@@ -1689,11 +1736,22 @@ export default function ProgramsAndOfficesScreen() {
                                                 <View style={s.activeBadgeDot} />
                                                 <Text style={s.activeBadgeText}>Active</Text>
                                               </View>
-                                              {hasRejected && (
+                                              {!isAuditor && hasRejected && (
                                                 <View style={s.needsRevisionBadge}>
                                                   <View style={s.needsRevisionBadgeDot} />
                                                   <Text style={s.needsRevisionBadgeText}>Needs Revision</Text>
                                                 </View>
+                                              )}
+                                              {shouldShowToggle && (
+                                                <TouchableOpacity
+                                                  style={s.showMoreBtn}
+                                                  onPress={() => toggleExpandReq(reqId)}
+                                                  activeOpacity={0.7}
+                                                >
+                                                  <Text style={s.showMoreText}>
+                                                    {isExpanded ? 'Show less' : 'Show more'}
+                                                  </Text>
+                                                </TouchableOpacity>
                                               )}
                                             </View>
 
@@ -1704,19 +1762,6 @@ export default function ProgramsAndOfficesScreen() {
                                             >
                                               {desc || 'Standard requirement'}
                                             </Text>
-
-                                            {/* Show more / Show less toggle */}
-                                            {shouldShowToggle && (
-                                              <TouchableOpacity
-                                                style={s.showMoreBtn}
-                                                onPress={() => toggleExpandReq(reqId)}
-                                                activeOpacity={0.7}
-                                              >
-                                                <Text style={s.showMoreText}>
-                                                  {isExpanded ? 'Show less' : 'Show more'}
-                                                </Text>
-                                              </TouchableOpacity>
-                                            )}
                                           </View>
 
                                           {/* Right: Submitter Avatars + Auditor evaluate */}
@@ -1725,8 +1770,12 @@ export default function ProgramsAndOfficesScreen() {
                                               <View style={s.avatarStackRow}>
                                                 {assignedPersonnel.slice(0, 3).map((u: any, idx: number) => {
                                                   const picUrl = getAvatarUrl(u);
-                                                  const uRejected = u.hasrejected === true || Number(u.rejectedcount) > 0;
-                                                  const uUploaded = u.hasuploaded === 1 || u.hasuploaded === true;
+                                                  const uRejected =
+                                                    !isAuditor &&
+                                                    (u.hasrejected === true || Number(u.rejectedcount) > 0);
+                                                  const uUploaded = isAuditor
+                                                    ? Number(u.approvedcount ?? u.totalfiles ?? 0) > 0
+                                                    : u.hasuploaded === 1 || u.hasuploaded === true;
                                                   const uName = `${u.firstname || ''} ${u.lastname || ''}`.trim() || u.Username || 'U';
 
                                                   return (
@@ -1737,13 +1786,19 @@ export default function ProgramsAndOfficesScreen() {
                                                         fullName={uName}
                                                         size={22}
                                                         textSize={8}
-                                                        ring={uRejected ? '#ef4444' : uUploaded ? '#10b981' : '#e2e8f0'}
+                                                        ring={
+                                                          isAuditor
+                                                            ? '#e2e8f0'
+                                                            : uRejected
+                                                            ? '#ef4444'
+                                                            : uUploaded
+                                                            ? '#10b981'
+                                                            : '#e2e8f0'
+                                                        }
                                                       />
 
-                                                      
-
-                                                      {/* Badge Overlay: Admins see normal check/reject badge */}
-                                                      {isPersonnel ? null : uRejected ? (
+                                                      {/* Badge Overlay: Admins see check/reject badge; hidden for External Auditors */}
+                                                      {isPersonnel || isAuditor ? null : uRejected ? (
                                                         <View style={s.avatarRejectBadge}>
                                                           <MaterialIcons name="close" size={8} color="#ffffff" />
                                                         </View>
@@ -1945,6 +2000,7 @@ export default function ProgramsAndOfficesScreen() {
         <UserFileLightbox
           visible={Boolean(lightboxFile)}
           file={lightboxFile}
+          allowDownload={!isAuditor}
           onClose={() => setLightboxFile(null)}
         />
       )}
@@ -1958,7 +2014,8 @@ export default function ProgramsAndOfficesScreen() {
 function renderOfficeCard(
   office: any,
   viewMode: 'grid' | 'list',
-  onPress: (o: any) => void
+  onPress: (o: any) => void,
+  officeAuditorsMap: Record<number, any[]> = {}
 ) {
   const isAcademic = isAcademicEntity(office);
   const totalReqs = Number(office.totalrequirements || office.total_requirements || 0);
@@ -1968,7 +2025,10 @@ function renderOfficeCard(
   const isPartial = statusStr.toLowerCase().includes('partial');
 
   const headsList = Array.isArray(office.heads) ? office.heads : [];
-  const auditorsList = Array.isArray(office.auditors) ? office.auditors : [];
+  const auditorsList =
+    Array.isArray(office.auditors) && office.auditors.length > 0
+      ? office.auditors
+      : officeAuditorsMap[getOfficeId(office)] || [];
 
   return (
     <TouchableOpacity
@@ -2123,8 +2183,8 @@ function renderOfficeCard(
           </Text>
           <View style={s.avatarsCluster}>
             {auditorsList.length === 0 ? (
-              <View style={[s.avatarCircle, { backgroundColor: '#0284c7' }]}>
-                <Text style={s.avatarInitials}>VJ</Text>
+              <View style={s.unassignedAvatar}>
+                <Text style={s.unassignedAvatarText}>Unassigned</Text>
               </View>
             ) : (
               auditorsList.slice(0, 2).map((aud: any, i: number) => {

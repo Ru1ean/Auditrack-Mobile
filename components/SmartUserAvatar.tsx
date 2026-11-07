@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { StyleSheet, Text, View, ViewStyle, TextStyle, ImageStyle } from 'react-native';
 import { Image } from 'expo-image';
 import { LinearGradient } from 'expo-linear-gradient';
-import { getProfilePicUrl } from './connect';
+import { getProfilePicUrl, SUPABASE_PROFILE_STORAGE } from './connect';
 
 // 🎨 Exact match of Web's Tailwind avatarPalettes
 export const avatarPalettes = [
@@ -93,6 +93,7 @@ export default function SmartUserAvatar({
   textStyle,
 }: SmartUserAvatarProps) {
   const [imgFailed, setImgFailed] = useState(false);
+  const [fallbackSrc, setFallbackSrc] = useState<string | null>(null);
 
   const firstname = user?.firstname || user?.FirstName || '';
   const lastname = user?.lastname || user?.LastName || '';
@@ -126,9 +127,10 @@ export default function SmartUserAvatar({
 
   useEffect(() => {
     setImgFailed(false);
+    setFallbackSrc(null);
   }, [rawPic]);
 
-  const resolvedPicUrl = getProfilePicUrl(rawPic);
+  const resolvedPicUrl = fallbackSrc || getProfilePicUrl(rawPic);
 
   const borderRadius =
     shape === 'circle' ? Math.round(size / 2) : shape === 'rounded' ? 8 : 0;
@@ -168,7 +170,16 @@ export default function SmartUserAvatar({
           ]}
           contentFit="cover"
           transition={150}
-          onError={() => setImgFailed(true)}
+          onError={() => {
+            if (!fallbackSrc && resolvedPicUrl && !resolvedPicUrl.includes(SUPABASE_PROFILE_STORAGE)) {
+              const filename = resolvedPicUrl.split('/').pop();
+              if (filename && filename.includes('.')) {
+                setFallbackSrc(`${SUPABASE_PROFILE_STORAGE}/${filename}`);
+                return;
+              }
+            }
+            setImgFailed(true);
+          }}
         />
       </View>
     );

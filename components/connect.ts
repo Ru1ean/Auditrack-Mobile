@@ -6,7 +6,7 @@ import * as FileSystem from 'expo-file-system/legacy';
 import { Platform } from 'react-native';
 
 const DEFAULT_API_BASE_URL =
-  process.env.EXPO_PUBLIC_API_BASE_URL || 'http://192.168.1.3:5000';
+  process.env.EXPO_PUBLIC_API_BASE_URL || 'https://compliance-audit.onrender.com';
 
 const normalizeBaseUrl = (url: string) => url.trim().replace(/\/+$/, '');
 
@@ -15,6 +15,9 @@ export const API_BASE_URL = normalizeBaseUrl(DEFAULT_API_BASE_URL);
 export const BASE_URL = API_BASE_URL.endsWith('/api')
   ? API_BASE_URL
   : `${API_BASE_URL}/api`;
+
+export const SUPABASE_PROFILE_STORAGE =
+  'https://ylluxulqxkjircffndxg.supabase.co/storage/v1/object/public/profile-pics';
 
 export const apiUrl = (endpoint = '') => {
   const normalizedEndpoint = endpoint.startsWith('/') ? endpoint : `/${endpoint}`;
@@ -318,7 +321,7 @@ const uploadUserFileRequest = async ({
   return requestFormData(endpoint, formData, 'POST');
 };
 
-// 🖼️ Unified Profile Picture URL Resolver
+// 🖼️ Unified Profile Picture URL Resolver (Matching Web SmartUserAvatar.jsx with Supabase Storage)
 export const getProfilePicUrl = (userOrPic?: any): string | null => {
   if (!userOrPic) return null;
   const rawPic =
@@ -340,10 +343,25 @@ export const getProfilePicUrl = (userOrPic?: any): string | null => {
 
   const serverOrigin = API_BASE_URL.replace(/\/api\/?$/, '');
 
-  if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
+  if (
+    trimmed.startsWith('http://') ||
+    trimmed.startsWith('https://') ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('file:')
+  ) {
     return trimmed
       .replace('http://localhost:5000', serverOrigin)
       .replace('http://127.0.0.1:5000', serverOrigin);
+  }
+
+  // Strip local upload prefixes to check if it's a Supabase-stored profile picture
+  const cleanName = trimmed
+    .replace(/^\/?(api\/)?uploads\/profile-pics\//, '')
+    .replace(/^\/?profile-pics\//, '')
+    .replace(/^\//, '');
+  if (cleanName.startsWith('profilepic-') || cleanName.startsWith('profilepic')) {
+    return `${SUPABASE_PROFILE_STORAGE}/${cleanName}`;
   }
 
   if (trimmed.startsWith('/api/uploads/')) {
@@ -365,6 +383,170 @@ export const getProfilePicUrl = (userOrPic?: any): string | null => {
     return `${serverOrigin}/uploads/${trimmed}`;
   }
   return `${serverOrigin}/uploads/profile-pics/${trimmed}`;
+};
+
+// 📅 Deadline Countdown Helper (Matching Web frontend/src/utils/deadlineHelpers.js)
+export interface DeadlineInfo {
+  hasDeadline: boolean;
+  daysLeft: number | null;
+  status: 'completed' | 'overdue' | 'due-today' | 'urgent' | 'upcoming' | 'normal' | 'none';
+  label: string;
+  shortLabel: string;
+  formattedDate: string;
+  bgColor: string;
+  textColor: string;
+  borderColor: string;
+  dotColor: string;
+}
+
+export const getDeadlineInfo = (deadline: any, isCompletedOrPercent: any = false): DeadlineInfo => {
+  const isCompleted = Boolean(
+    isCompletedOrPercent === true ||
+      (typeof isCompletedOrPercent === 'number' && isCompletedOrPercent >= 100) ||
+      (isCompletedOrPercent &&
+        typeof isCompletedOrPercent === 'object' &&
+        (Number(
+          isCompletedOrPercent.completionPercent ??
+            isCompletedOrPercent.completionpercent ??
+            isCompletedOrPercent.compliance ??
+            isCompletedOrPercent.compliancepercent ??
+            0
+        ) >= 100 ||
+          isCompletedOrPercent.iscompleted === true ||
+          isCompletedOrPercent.isCompleted === true))
+  );
+
+  if (!deadline) {
+    return {
+      hasDeadline: false,
+      daysLeft: null,
+      status: isCompleted ? 'completed' : 'none',
+      label: isCompleted ? 'Completed (No deadline)' : 'No deadline set',
+      shortLabel: isCompleted ? 'Completed' : 'No deadline',
+      formattedDate: '',
+      bgColor: isCompleted ? '#ecfdf5' : '#f1f5f9',
+      textColor: isCompleted ? '#047857' : '#475569',
+      borderColor: isCompleted ? '#a7f3d0' : '#e2e8f0',
+      dotColor: isCompleted ? '#10b981' : '#94a3b8',
+    };
+  }
+
+  const parsed = new Date(deadline);
+  if (Number.isNaN(parsed.getTime())) {
+    return {
+      hasDeadline: false,
+      daysLeft: null,
+      status: isCompleted ? 'completed' : 'none',
+      label: isCompleted ? 'Completed (No deadline)' : 'No deadline set',
+      shortLabel: isCompleted ? 'Completed' : 'No deadline',
+      formattedDate: '',
+      bgColor: isCompleted ? '#ecfdf5' : '#f1f5f9',
+      textColor: isCompleted ? '#047857' : '#475569',
+      borderColor: isCompleted ? '#a7f3d0' : '#e2e8f0',
+      dotColor: isCompleted ? '#10b981' : '#94a3b8',
+    };
+  }
+
+  const now = new Date();
+  const todayMidnight = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const deadlineMidnight = new Date(parsed.getFullYear(), parsed.getMonth(), parsed.getDate());
+  const diffMs = deadlineMidnight.getTime() - todayMidnight.getTime();
+  const daysLeft = Math.round(diffMs / (1000 * 60 * 60 * 24));
+
+  const formattedDate = parsed.toLocaleDateString('en-US', {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+  });
+
+  if (isCompleted) {
+    return {
+      hasDeadline: true,
+      daysLeft,
+      status: 'completed',
+      label: `Due ${formattedDate} (Completed)`,
+      shortLabel: 'Completed',
+      formattedDate,
+      bgColor: '#ecfdf5',
+      textColor: '#047857',
+      borderColor: '#a7f3d0',
+      dotColor: '#10b981',
+    };
+  }
+
+  if (daysLeft < 0) {
+    const overdueDays = Math.abs(daysLeft);
+    return {
+      hasDeadline: true,
+      daysLeft,
+      status: 'overdue',
+      label: `Due ${formattedDate} (${overdueDays}d overdue)`,
+      shortLabel: `${overdueDays}d overdue`,
+      formattedDate,
+      bgColor: '#fff1f2',
+      textColor: '#be123c',
+      borderColor: '#fecdd3',
+      dotColor: '#f43f5e',
+    };
+  }
+
+  if (daysLeft === 0) {
+    return {
+      hasDeadline: true,
+      daysLeft: 0,
+      status: 'due-today',
+      label: `Due ${formattedDate} (Due today)`,
+      shortLabel: 'Due today',
+      formattedDate,
+      bgColor: '#fff1f2',
+      textColor: '#be123c',
+      borderColor: '#fecdd3',
+      dotColor: '#f43f5e',
+    };
+  }
+
+  if (daysLeft <= 3) {
+    return {
+      hasDeadline: true,
+      daysLeft,
+      status: 'urgent',
+      label: `Due ${formattedDate} (${daysLeft}d left)`,
+      shortLabel: `${daysLeft}d left`,
+      formattedDate,
+      bgColor: '#fffbeb',
+      textColor: '#b45309',
+      borderColor: '#fde68a',
+      dotColor: '#f59e0b',
+    };
+  }
+
+  if (daysLeft <= 7) {
+    return {
+      hasDeadline: true,
+      daysLeft,
+      status: 'upcoming',
+      label: `Due ${formattedDate} (${daysLeft}d left)`,
+      shortLabel: `${daysLeft}d left`,
+      formattedDate,
+      bgColor: '#fffbeb',
+      textColor: '#b45309',
+      borderColor: '#fde68a',
+      dotColor: '#f59e0b',
+    };
+  }
+
+  return {
+    hasDeadline: true,
+    daysLeft,
+    status: 'normal',
+    label: `Due ${formattedDate} (${daysLeft}d left)`,
+    shortLabel: `${daysLeft}d left`,
+    formattedDate,
+    bgColor: '#eef2ff',
+    textColor: '#4338ca',
+    borderColor: '#c7d2fe',
+    dotColor: '#6366f1',
+  };
 };
 
 export const uploadProfilePicRequest = async (

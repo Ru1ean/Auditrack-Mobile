@@ -22,6 +22,7 @@ import {
   areasAPI,
   criteriaAPI,
   eventsAPI,
+  getDeadlineInfo,
   getProfilePicUrl,
   getStoredUser,
   normalizeUser,
@@ -118,6 +119,16 @@ export default function RequirementsStandardsScreen() {
   // Expanded Nodes in Structure Tree
   const [expandedAreaIds, setExpandedAreaIds] = useState<Set<number>>(new Set());
   const [expandedCriteriaIds, setExpandedCriteriaIds] = useState<Set<number>>(new Set());
+  const [expandedReqIds, setExpandedReqIds] = useState<Set<number>>(new Set());
+
+  const toggleExpandReq = (reqId: number) => {
+    setExpandedReqIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(reqId)) next.delete(reqId);
+      else next.add(reqId);
+      return next;
+    });
+  };
 
   // Programs and Offices Tab State
   const [offices, setOffices] = useState<any[]>([]);
@@ -889,6 +900,31 @@ export default function RequirementsStandardsScreen() {
                       {isActive ? 'Active' : 'Inactive'}
                     </Text>
                   </View>
+
+                  {(() => {
+                    const dl = getDeadlineInfo(evt.deadline, evt);
+                    if (!dl.hasDeadline && dl.status === 'none') return null;
+                    return (
+                      <View
+                        style={{
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 4,
+                          backgroundColor: dl.bgColor,
+                          borderColor: dl.borderColor,
+                          borderWidth: 1,
+                          borderRadius: 12,
+                          paddingHorizontal: 8,
+                          paddingVertical: 3,
+                        }}
+                      >
+                        <MaterialIcons name="schedule" size={11} color={dl.textColor} />
+                        <Text style={{ fontSize: 10, fontWeight: '700', color: dl.textColor }}>
+                          {dl.shortLabel}
+                        </Text>
+                      </View>
+                    );
+                  })()}
                 </View>
 
                 {/* Event Name */}
@@ -988,6 +1024,31 @@ export default function RequirementsStandardsScreen() {
                     </Text>
                   </View>
                 ) : null}
+                {(() => {
+                  const dl = getDeadlineInfo(
+                    selectedEventForStructure?.deadline,
+                    selectedEventForStructure
+                  );
+                  return (
+                    <View
+                      style={[
+                        s.structureMetaBadge,
+                        {
+                          backgroundColor: dl.bgColor,
+                          borderColor: dl.borderColor,
+                          flexDirection: 'row',
+                          alignItems: 'center',
+                          gap: 3,
+                        },
+                      ]}
+                    >
+                      <MaterialIcons name="schedule" size={10} color={dl.textColor} />
+                      <Text style={[s.structureMetaBadgeText, { color: dl.textColor, fontWeight: '700' }]}>
+                        {dl.shortLabel}
+                      </Text>
+                    </View>
+                  );
+                })()}
               </View>
             </View>
 
@@ -1519,8 +1580,24 @@ export default function RequirementsStandardsScreen() {
                                                          })}
                                                       </View>
 
-                                                      {/* Standard Description */}
-                                                      <Text style={s.requirementDesc}>{rDesc}</Text>
+                                                      {/* Standard Description with 2-line clamp & inline Show more / Show less */}
+                                                      <Text
+                                                        style={s.requirementDesc}
+                                                        numberOfLines={expandedReqIds.has(rId) ? undefined : 2}
+                                                      >
+                                                        {rDesc}
+                                                      </Text>
+                                                      {(rDesc.length > 90 || expandedReqIds.has(rId)) && (
+                                                        <TouchableOpacity
+                                                          onPress={() => toggleExpandReq(rId)}
+                                                          activeOpacity={0.7}
+                                                          style={{ alignSelf: 'flex-start', marginBottom: 4 }}
+                                                        >
+                                                          <Text style={{ fontSize: 11, fontWeight: '700', color: '#4f46e5' }}>
+                                                            {expandedReqIds.has(rId) ? 'Show less' : 'Show more'}
+                                                          </Text>
+                                                        </TouchableOpacity>
+                                                      )}
 
                                                       {/* Created & Updated dates */}
                                                       <Text style={s.reqDatesText}>

@@ -39,7 +39,10 @@ export default function AccountScreen() {
   // Personnel specific assignments
   const [personnelScope, setPersonnelScope] = useState<any | null>(null);
 
-  // Change Password Modal state
+  // Profile Tab Navigation ('overview' | 'password') matching web Profile.jsx
+  const [activeTab, setActiveTab] = useState<'overview' | 'password'>('overview');
+
+  // Change Password state
   const [showPasswordModal, setShowPasswordModal] = useState(false);
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
@@ -224,58 +227,247 @@ export default function AccountScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* ─── Profile Summary Card ─── */}
-      <View style={styles.profileCard}>
-        <View style={styles.avatarContainer}>
+      {/* ─── Profile Summary Card (Matching Web Profile.jsx) ─── */}
+      <View style={[styles.profileCard, { padding: 0, overflow: 'hidden' }]}>
+        <View style={{ padding: 20, width: '100%', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' }}>
+          <View style={styles.avatarContainer}>
+            <TouchableOpacity
+              onPress={handlePickProfilePhoto}
+              activeOpacity={0.85}
+            >
+              <SmartUserAvatar
+                user={user}
+                fullName={fullName}
+                size={78}
+                textSize={26}
+                ring={isAuditor ? '#93c5fd' : '#e2e8f0'}
+              />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.avatarEditBadge}
+              onPress={handlePickProfilePhoto}
+              disabled={uploadingPhoto}
+              activeOpacity={0.8}
+            >
+              {uploadingPhoto ? (
+                <ActivityIndicator size="small" color="#ffffff" />
+              ) : (
+                <MaterialIcons name="camera-alt" size={13} color="#ffffff" />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          <Text style={styles.name}>{fullName}</Text>
+          <Text style={styles.email}>{user?.Email || user?.email || ''}</Text>
+
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
+            <View
+              style={[
+                styles.roleBadge,
+                { marginTop: 0 },
+                isAuditor ? styles.roleBadgeAuditor : styles.roleBadgePersonnel,
+              ]}
+            >
+              <MaterialIcons
+                name={isAuditor ? 'verified-user' : 'badge'}
+                size={14}
+                color={isAuditor ? '#38bdf8' : '#34d399'}
+              />
+              <Text
+                style={[
+                  styles.roleText,
+                  isAuditor ? styles.roleTextAuditor : styles.roleTextPersonnel,
+                ]}
+              >
+                {isAuditor ? 'External Auditor' : 'Office Personnel'}
+              </Text>
+            </View>
+
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                gap: 5,
+                backgroundColor: '#2563eb',
+                paddingHorizontal: 12,
+                paddingVertical: 6,
+                borderRadius: 10,
+              }}
+              onPress={() => router.push('/edit-profile')}
+              activeOpacity={0.85}
+            >
+              <MaterialIcons name="edit" size={13} color="#ffffff" />
+              <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Edit profile</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {/* ─── Profile Options Navigation Bar (Matching Web Profile.jsx) ─── */}
+        <View
+          style={{
+            flexDirection: 'row',
+            width: '100%',
+            backgroundColor: '#f8fafc',
+            borderBottomWidth: 1,
+            borderBottomColor: '#e2e8f0',
+            paddingHorizontal: 12,
+            paddingTop: 6,
+            gap: 6,
+          }}
+        >
           <TouchableOpacity
-            onPress={handlePickProfilePhoto}
-            activeOpacity={0.85}
-          >
-            <SmartUserAvatar
-              user={user}
-              fullName={fullName}
-              size={78}
-              textSize={26}
-              ring={isAuditor ? '#93c5fd' : '#e2e8f0'}
-            />
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.avatarEditBadge}
-            onPress={handlePickProfilePhoto}
-            disabled={uploadingPhoto}
+            onPress={() => setActiveTab('overview')}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              borderBottomWidth: 2,
+              borderBottomColor: activeTab === 'overview' ? '#2563eb' : 'transparent',
+              backgroundColor: activeTab === 'overview' ? '#ffffff' : 'transparent',
+              borderTopLeftRadius: 8,
+              borderTopRightRadius: 8,
+            }}
             activeOpacity={0.8}
           >
-            {uploadingPhoto ? (
-              <ActivityIndicator size="small" color="#ffffff" />
-            ) : (
-              <MaterialIcons name="camera-alt" size={13} color="#ffffff" />
-            )}
+            <MaterialIcons
+              name="person-outline"
+              size={15}
+              color={activeTab === 'overview' ? '#2563eb' : '#64748b'}
+            />
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: activeTab === 'overview' ? '700' : '600',
+                color: activeTab === 'overview' ? '#2563eb' : '#64748b',
+              }}
+            >
+              Account Information
+            </Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            onPress={() => setActiveTab('password')}
+            style={{
+              flexDirection: 'row',
+              alignItems: 'center',
+              gap: 6,
+              paddingHorizontal: 12,
+              paddingVertical: 10,
+              borderBottomWidth: 2,
+              borderBottomColor: activeTab === 'password' ? '#2563eb' : 'transparent',
+              backgroundColor: activeTab === 'password' ? '#ffffff' : 'transparent',
+              borderTopLeftRadius: 8,
+              borderTopRightRadius: 8,
+            }}
+            activeOpacity={0.8}
+          >
+            <MaterialIcons
+              name="vpn-key"
+              size={15}
+              color={activeTab === 'password' ? '#2563eb' : '#64748b'}
+            />
+            <Text
+              style={{
+                fontSize: 12,
+                fontWeight: activeTab === 'password' ? '700' : '600',
+                color: activeTab === 'password' ? '#2563eb' : '#64748b',
+              }}
+            >
+              Password &amp; Security
+            </Text>
           </TouchableOpacity>
         </View>
 
-        <Text style={styles.name}>{fullName}</Text>
-        <Text style={styles.email}>{user?.Email || user?.email || ''}</Text>
+        {/* ─── Tab Content ─── */}
+        {activeTab === 'overview' ? (
+          <View style={{ padding: 16, width: '100%' }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>
+              Account information
+            </Text>
+            <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2, marginBottom: 12 }}>
+              Basic information connected to your login.
+            </Text>
 
-        <View
-          style={[
-            styles.roleBadge,
-            isAuditor ? styles.roleBadgeAuditor : styles.roleBadgePersonnel,
-          ]}
-        >
-          <MaterialIcons
-            name={isAuditor ? 'verified-user' : 'badge'}
-            size={14}
-            color={isAuditor ? '#38bdf8' : '#34d399'}
-          />
-          <Text
-            style={[
-              styles.roleText,
-              isAuditor ? styles.roleTextAuditor : styles.roleTextPersonnel,
-            ]}
-          >
-            {isAuditor ? 'External Auditor' : 'Office Personnel'}
-          </Text>
-        </View>
+            <View style={{ gap: 8 }}>
+              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Full name</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>{fullName}</Text>
+              </View>
+              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Email address</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>{user?.Email || user?.email || '-'}</Text>
+              </View>
+              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
+                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Role</Text>
+                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>
+                  {isAuditor ? 'External Auditor' : 'Office Personnel'}
+                </Text>
+              </View>
+            </View>
+          </View>
+        ) : (
+          <View style={{ padding: 16, width: '100%' }}>
+            <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>
+              Password &amp; Security
+            </Text>
+            <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2, marginBottom: 12 }}>
+              Ensure your new password contains at least 6 characters.
+            </Text>
+
+            {passwordError ? (
+              <View style={styles.errorBox}>
+                <MaterialIcons name="error-outline" size={16} color="#ef4444" />
+                <Text style={styles.errorText}>{passwordError}</Text>
+              </View>
+            ) : null}
+
+            <Text style={styles.inputLabel}>Current Password</Text>
+            <TextInput
+              style={styles.input}
+              secureTextEntry
+              placeholder="Enter current password"
+              placeholderTextColor="#64748b"
+              value={currentPassword}
+              onChangeText={setCurrentPassword}
+            />
+
+            <Text style={styles.inputLabel}>New Password</Text>
+            <TextInput
+              style={styles.input}
+              secureTextEntry
+              placeholder="Enter new password"
+              placeholderTextColor="#64748b"
+              value={newPassword}
+              onChangeText={setNewPassword}
+            />
+
+            <Text style={styles.inputLabel}>Confirm New Password</Text>
+            <TextInput
+              style={styles.input}
+              secureTextEntry
+              placeholder="Re-enter new password"
+              placeholderTextColor="#64748b"
+              value={confirmNewPassword}
+              onChangeText={setConfirmNewPassword}
+            />
+
+            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14 }}>
+              <TouchableOpacity
+                style={styles.modalSaveBtn}
+                onPress={handleChangePassword}
+                disabled={updatingPassword}
+              >
+                {updatingPassword ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.modalSaveBtnText}>Update Password</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
       </View>
 
       {/* ─── Assigned Scope Section ─── */}
