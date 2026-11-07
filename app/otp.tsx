@@ -1,13 +1,11 @@
-import { MaterialIcons } from '@expo/vector-icons';
 import { useLocalSearchParams, useRouter } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   Image,
   KeyboardAvoidingView,
   Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
@@ -19,32 +17,69 @@ import { usersAPI } from '../components/connect';
 export default function OtpScreen() {
   const router = useRouter();
   const params = useLocalSearchParams();
+
   const email = (params.email as string) || '';
+  const firstname = (params.firstname as string) || '';
+  const middleinitial = (params.middleinitial as string) || '';
+  const lastname = (params.lastname as string) || '';
+  const password = (params.password as string) || '';
+  const roleid = params.roleid ? Number(params.roleid) : 2;
 
   const [otp, setOtp] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [resending, setResending] = useState(false);
+  const [message, setMessage] = useState('Enter the one-time PIN sent to your email.');
   const [error, setError] = useState('');
-  const [resendTimer, setResendTimer] = useState(60);
+  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [focused, setFocused] = useState(false);
+  const didSendRef = useRef(false);
 
-  useEffect(() => {
-    let interval: any;
-    if (resendTimer > 0) {
-      interval = setInterval(() => {
-        setResendTimer((prev) => prev - 1);
-      }, 1000);
-    }
-    return () => clearInterval(interval);
-  }, [resendTimer]);
-
-  const handleVerify = async () => {
-    if (!otp || otp.trim().length !== 6) {
-      setError('Please enter the full 6-digit verification code.');
+  const sendOtp = async () => {
+    if (!email) {
+      setError('Registration email is missing. Please go back and register again.');
       return;
     }
 
+    setSending(true);
+    setError('');
+
+    try {
+      const response = await usersAPI.sendRegistrationOtp({
+        firstname,
+        middleinitial,
+        lastname,
+        email,
+        password,
+        roleid,
+      });
+
+      setMessage(response?.message || 'We sent a one-time PIN to your email.');
+    } catch (err: any) {
+      const isTimeout = err?.message?.toLowerCase().includes('timeout');
+      setError(
+        err?.message ||
+          (isTimeout
+            ? 'Request timed out while sending OTP. Please click Resend OTP.'
+            : 'Failed to send one-time PIN.')
+      );
+    } finally {
+      setSending(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!email || didSendRef.current) return;
+    didSendRef.current = true;
+    void sendOtp();
+  }, [email]);
+
+  const handleVerify = async () => {
     if (!email) {
       setError('Registration email is missing. Please go back and register again.');
+      return;
+    }
+
+    if (otp.length !== 6) {
+      setError('Enter the 6-digit one-time PIN.');
       return;
     }
 
@@ -53,134 +88,123 @@ export default function OtpScreen() {
 
     try {
       const response = await usersAPI.verifyRegistrationOtp({
-        email: email.trim().toLowerCase(),
-        otp: otp.trim(),
+        email,
+        otp,
       });
 
       if (response?.success) {
-        Alert.alert(
-          'Email Verified',
-          response.message || 'Your account has been verified and is now pending admin approval.',
-          [
-            {
-              text: 'Sign In',
-              onPress: () => router.replace('/login'),
-            },
-          ]
-        );
-      } else {
-        setError(response?.message || 'Invalid or expired PIN code.');
+        router.replace({
+          pathname: '/login' as any,
+          params: {
+            message: response.message || 'Email verified. Your account is pending approval.',
+          },
+        });
+        return;
       }
+
+      setError(response?.message || 'Wrong one-time PIN. Please try again.');
     } catch (err: any) {
-      console.error('OTP Verification error:', err);
-      setError(err?.message || 'Verification failed. Please try again.');
+      setError(err?.message || 'Wrong one-time PIN. Please try again.');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleResendOtp = async () => {
-    if (resendTimer > 0 || resending) return;
-
-    setResending(true);
-    setError('');
-    try {
-      const res = await usersAPI.sendRegistrationOtp({
-        email: email.trim().toLowerCase(),
-      });
-      if (res?.success) {
-        Alert.alert('Code Sent', 'A new verification code has been sent to your email.');
-        setResendTimer(60);
-      } else {
-        setError(res?.message || 'Failed to resend code.');
-      }
-    } catch (err: any) {
-      setError(err?.message || 'Could not resend code. Please try again later.');
-    } finally {
-      setResending(false);
-    }
-  };
+  const isVerifyDisabled = !email || loading || otp.length !== 6;
 
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
+      style={styles.screen}
     >
-      <ScrollView contentContainerStyle={styles.contentContainer}>
-        <View style={styles.headerContainer}>
-          <View style={styles.logoWrapper}>
-            <Image
-              source={require('../assets/images/logo.png')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
-          </View>
-          <Text style={styles.title}>Email Verification</Text>
-          <Text style={styles.subtitle}>
-            Enter the 6-digit one-time PIN sent to:
-          </Text>
-          <Text style={styles.emailText}>{email || 'your email'}</Text>
-        </View>
-
-        <View style={styles.card}>
-          {error ? (
-            <View style={styles.errorBox}>
-              <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
-              <Text style={styles.errorText}>{error}</Text>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.centerBox}>
+          {/* Header (Exact match to Web Otp.jsx) */}
+          <View style={styles.headerBlock}>
+            <View style={styles.brandRow}>
+              <Image
+                source={require('../assets/images/logo.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
+              <Text style={styles.brandName}>Auditrack</Text>
             </View>
-          ) : null}
+            <Text style={styles.title}>Verify OTP</Text>
+            <Text style={styles.subtitle}>
+              {email
+                ? `Enter the code sent to ${email}`
+                : 'Please register first to receive a one-time PIN'}
+            </Text>
+          </View>
 
-          <Text style={styles.label}>Verification Code</Text>
-          <TextInput
-            style={styles.otpInput}
-            value={otp}
-            onChangeText={(val) => {
-              setOtp(val.replace(/[^0-9]/g, '').slice(0, 6));
-              setError('');
-            }}
-            placeholder="000000"
-            placeholderTextColor="#64748b"
-            keyboardType="number-pad"
-            maxLength={6}
-            autoFocus
-          />
+          <View style={styles.formStack}>
+            {message ? (
+              <View style={styles.messageBox}>
+                <Text style={styles.messageText}>{message}</Text>
+              </View>
+            ) : null}
 
-          <TouchableOpacity
-            style={[styles.verifyButton, (loading || otp.length < 6) && styles.verifyButtonDisabled]}
-            onPress={handleVerify}
-            disabled={loading || otp.length < 6}
-            activeOpacity={0.8}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <Text style={styles.verifyButtonText}>Verify & Complete</Text>
-            )}
-          </TouchableOpacity>
+            {error ? (
+              <View style={styles.errorBox}>
+                <Text style={styles.errorText}>{error}</Text>
+              </View>
+            ) : null}
 
-          <View style={styles.resendRow}>
-            <Text style={styles.resendPrompt}>Didn&apos;t receive the code? </Text>
+            <TextInput
+              style={[styles.otpInput, focused && styles.otpInputFocused]}
+              value={otp}
+              onChangeText={(val) => {
+                setOtp(val.replace(/\D/g, '').slice(0, 6));
+                setError('');
+              }}
+              placeholder="000000"
+              placeholderTextColor="#9ca3af"
+              keyboardType="number-pad"
+              maxLength={6}
+              editable={Boolean(email) && !loading}
+              onFocus={() => setFocused(true)}
+              onBlur={() => setFocused(false)}
+            />
+
             <TouchableOpacity
-              onPress={handleResendOtp}
-              disabled={resendTimer > 0 || resending}
+              style={[styles.verifyBtn, isVerifyDisabled && styles.verifyBtnDisabled]}
+              onPress={handleVerify}
+              disabled={isVerifyDisabled}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.verifyBtnText}>
+                {loading ? 'Verifying...' : 'Verify OTP'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.resendBtn}
+              onPress={sendOtp}
+              disabled={!email || sending}
+              activeOpacity={0.75}
             >
               <Text
                 style={[
-                  styles.resendLink,
-                  resendTimer > 0 && styles.resendLinkDisabled,
+                  styles.resendBtnText,
+                  (!email || sending) && styles.resendBtnTextDisabled,
                 ]}
               >
-                {resendTimer > 0 ? `Resend in ${resendTimer}s` : 'Resend Code'}
+                {sending ? 'Sending...' : 'Resend OTP'}
               </Text>
             </TouchableOpacity>
-          </View>
 
-          <TouchableOpacity
-            style={styles.backButton}
-            onPress={() => router.replace('/login')}
-          >
-            <Text style={styles.backButtonText}>← Back to Login</Text>
-          </TouchableOpacity>
+            <View style={styles.footerRow}>
+              <Text style={styles.footerPrompt}>Wrong email? </Text>
+              <TouchableOpacity onPress={() => router.replace('/register')}>
+                <Text style={styles.footerLink}>Register again</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -188,145 +212,138 @@ export default function OtpScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: '#090e1a',
+    backgroundColor: '#ffffff',
   },
-  contentContainer: {
+  scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 20,
-  },
-  headerContainer: {
     alignItems: 'center',
-    marginBottom: 24,
+    paddingHorizontal: 32,
+    paddingVertical: 32,
+    backgroundColor: '#ffffff',
   },
-  logoWrapper: {
-    width: 72,
-    height: 72,
-    borderRadius: 20,
-    backgroundColor: '#0f172a',
-    borderWidth: 1.5,
-    borderColor: '#38bdf8',
+  centerBox: {
+    width: '100%',
+    maxWidth: 420,
+  },
+  headerBlock: {
+    alignItems: 'center',
+    marginBottom: 32,
+  },
+  brandRow: {
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
-    shadowColor: '#38bdf8',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 10,
-    elevation: 8,
+    gap: 10,
+    marginBottom: 12,
   },
-  logoImage: {
-    width: 50,
-    height: 50,
+  brandLogo: {
+    width: 44,
+    height: 44,
+  },
+  brandName: {
+    fontSize: 24,
+    fontWeight: '700',
+    color: '#0f172a',
+    letterSpacing: -0.4,
   },
   title: {
     fontSize: 24,
-    fontWeight: '800',
-    color: '#ffffff',
+    fontWeight: '700',
+    color: '#111827',
+    marginBottom: 8,
   },
   subtitle: {
     fontSize: 14,
-    color: '#94a3b8',
-    marginTop: 6,
-  },
-  emailText: {
-    fontSize: 14,
-    fontWeight: '700',
-    color: '#38bdf8',
-    marginTop: 2,
-  },
-  card: {
-    backgroundColor: '#0f172a',
-    borderRadius: 18,
-    borderWidth: 1,
-    borderColor: '#1e293b',
-    padding: 22,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 6,
-  },
-  label: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#e2e8f0',
-    marginBottom: 8,
+    color: '#4b5563',
     textAlign: 'center',
   },
-  otpInput: {
-    backgroundColor: '#1e293b',
+  formStack: {
+    gap: 16,
+  },
+  messageBox: {
+    padding: 12,
+    backgroundColor: '#eff6ff',
     borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 12,
-    paddingVertical: 14,
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-    textAlign: 'center',
-    letterSpacing: 10,
-    marginBottom: 16,
+    borderColor: '#bfdbfe',
+    borderRadius: 6,
   },
-  verifyButton: {
-    backgroundColor: '#0284c7',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 8,
-  },
-  verifyButtonDisabled: {
-    opacity: 0.5,
-  },
-  verifyButtonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  resendRow: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginTop: 18,
-  },
-  resendPrompt: {
-    fontSize: 13,
-    color: '#94a3b8',
-  },
-  resendLink: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#38bdf8',
-  },
-  resendLinkDisabled: {
-    color: '#64748b',
-  },
-  backButton: {
-    alignItems: 'center',
-    marginTop: 20,
-    paddingVertical: 6,
-  },
-  backButtonText: {
-    fontSize: 13,
-    color: '#94a3b8',
-    fontWeight: '600',
+  messageText: {
+    fontSize: 13.5,
+    color: '#1d4ed8',
   },
   errorBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
+    padding: 12,
+    backgroundColor: '#fef2f2',
     borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
-    borderRadius: 10,
-    padding: 10,
-    marginBottom: 14,
+    borderColor: '#fecaca',
+    borderRadius: 6,
   },
   errorText: {
-    flex: 1,
-    color: '#fca5a5',
-    fontSize: 13,
+    fontSize: 13.5,
+    color: '#b91c1c',
+  },
+  otpInput: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: '#d1d5db',
+    borderRadius: 6,
+    textAlign: 'center',
+    fontSize: 18,
+    letterSpacing: 6,
+    color: '#111827',
+    backgroundColor: '#ffffff',
+  },
+  otpInputFocused: {
+    borderColor: '#3b82f6',
+    borderWidth: 2,
+  },
+  verifyBtn: {
+    width: '100%',
+    paddingVertical: 12,
+    paddingHorizontal: 16,
+    borderRadius: 6,
+    backgroundColor: '#2563eb',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  verifyBtnDisabled: {
+    backgroundColor: '#93c5fd',
+  },
+  verifyBtnText: {
+    color: '#ffffff',
+    fontSize: 14.5,
+    fontWeight: '600',
+  },
+  resendBtn: {
+    width: '100%',
+    paddingVertical: 8,
+    alignItems: 'center',
+  },
+  resendBtnText: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  resendBtnTextDisabled: {
+    color: '#9ca3af',
+  },
+  footerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  footerPrompt: {
+    fontSize: 13.5,
+    color: '#4b5563',
+  },
+  footerLink: {
+    fontSize: 13.5,
+    fontWeight: '600',
+    color: '#2563eb',
   },
 });

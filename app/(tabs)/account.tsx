@@ -1,15 +1,11 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as DocumentPicker from 'expo-document-picker';
-import { Image } from 'expo-image';
 import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import SmartUserAvatar from '../../components/SmartUserAvatar';
 import React, { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
   Modal,
-  Platform,
+  Pressable,
   ScrollView,
   StyleSheet,
   Text,
@@ -18,37 +14,46 @@ import {
   View,
 } from 'react-native';
 import {
-  areasAPI,
-  getProfilePicUrl,
   getStoredUser,
   normalizeUser,
-  personnelAssignmentsAPI,
-  removeToken,
   storeUser,
   usersAPI,
 } from '../../components/connect';
+import SmartUserAvatar from '../../components/SmartUserAvatar';
 
 export default function AccountScreen() {
-  const router = useRouter();
   const [user, setUser] = useState<any>(null);
   const [loading, setLoading] = useState(true);
-  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
-  // Auditor specific assigned areas
-  const [auditorAreas, setAuditorAreas] = useState<any[]>([]);
-  // Personnel specific assignments
-  const [personnelScope, setPersonnelScope] = useState<any | null>(null);
-
-  // Profile Tab Navigation ('overview' | 'password') matching web Profile.jsx
+  // Profile Tab Navigation ('overview' | 'password') matching Web Profile.jsx
   const [activeTab, setActiveTab] = useState<'overview' | 'password'>('overview');
 
-  // Change Password state
-  const [showPasswordModal, setShowPasswordModal] = useState(false);
+  // Edit Profile Modal state (Matching Web EditProfileModal.jsx)
+  const [isEditOpen, setIsEditOpen] = useState(false);
+  const [editFirstName, setEditFirstName] = useState('');
+  const [editMiddleInitial, setEditMiddleInitial] = useState('');
+  const [editLastName, setEditLastName] = useState('');
+  const [editEmail, setEditEmail] = useState('');
+  const [pickedPhotoAsset, setPickedPhotoAsset] = useState<any>(null);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  // ChangePasswordCard state (Matching Web ChangePasswordCard.jsx)
   const [currentPassword, setCurrentPassword] = useState('');
   const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [updatingPassword, setUpdatingPassword] = useState(false);
-  const [passwordError, setPasswordError] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [otp, setOtp] = useState('');
+  const [showCurrentPassword, setShowCurrentPassword] = useState(false);
+  const [showNewPassword, setShowNewPassword] = useState(false);
+  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
+  const [otpSent, setOtpSent] = useState(false);
+  const [sendingOtp, setSendingOtp] = useState(false);
+  const [savingPassword, setSavingPassword] = useState(false);
+  const [cooldown, setCooldown] = useState(0);
+  const [pwStatus, setPwStatus] = useState<{ type: '' | 'error' | 'success'; message: string }>({
+    type: '',
+    message: '',
+  });
 
   const loadUser = useCallback(async () => {
     try {
@@ -57,29 +62,6 @@ export default function AccountScreen() {
       if (nextUser) {
         setUser(nextUser);
         await storeUser(nextUser);
-
-        const uid = Number(nextUser.userid);
-        if (nextUser.isAuditor && uid) {
-          areasAPI
-            .getAuditorAssignments(uid)
-            .then((arRes: any) => {
-              const list = Array.isArray(arRes?.assignments)
-                ? arRes.assignments
-                : Array.isArray(arRes?.data)
-                ? arRes.data
-                : [];
-              setAuditorAreas(list);
-            })
-            .catch(() => {});
-        } else if (nextUser.isPersonnel && uid) {
-          personnelAssignmentsAPI
-            .getMyAssignments()
-            .then((pRes: any) => {
-              if (pRes?.success) setPersonnelScope(pRes);
-            })
-            .catch(() => {});
-        }
-
         return nextUser;
       }
     } catch {
@@ -95,253 +77,326 @@ export default function AccountScreen() {
   }, []);
 
   useEffect(() => {
-    let active = true;
-    const run = async () => {
-      if (active) {
-        await loadUser();
-      }
-    };
-    void run();
-    return () => {
-      active = false;
-    };
+    void loadUser();
   }, [loadUser]);
 
-  const handleLogout = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to sign out?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await removeToken();
-          if (Platform.OS === 'web') {
-            localStorage.removeItem('user');
-          } else {
-            await AsyncStorage.removeItem('user');
-          }
-          router.replace('/login');
-        },
-      },
-    ]);
+  // Coowned countdown timer for Resend OTP
+  useEffect(() => {
+    if (cooldown <= 0) return;
+    const timer = setInterval(() => {
+      setCooldown((prev) => (prev > 0 ? prev - 1 : 0));
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [cooldown]);
+
+  const openEditProfileModal = () => {
+    setEditFirstName(user?.FirstName || user?.firstname || '');
+    setEditMiddleInitial(user?.MiddleInitial || user?.middleinitial || '');
+    setEditLastName(user?.LastName || user?.lastname || '');
+    setEditEmail(user?.Email || user?.email || '');
+    setPickedPhotoAsset(null);
+    setEditError('');
+    setIsEditOpen(true);
   };
 
-  const handleChangePassword = async () => {
-    if (!currentPassword || !newPassword || !confirmNewPassword) {
-      setPasswordError('Please fill in all fields.');
-      return;
-    }
-
-    if (newPassword !== confirmNewPassword) {
-      setPasswordError('New passwords do not match.');
-      return;
-    }
-
-    if (newPassword.length < 6) {
-      setPasswordError('New password must be at least 6 characters.');
-      return;
-    }
-
-    setUpdatingPassword(true);
-    setPasswordError('');
-
-    try {
-      const res = await usersAPI.changePassword({
-        currentPassword,
-        newPassword,
-      });
-
-      if (res?.success) {
-        Alert.alert('Success', 'Password has been updated successfully.');
-        setShowPasswordModal(false);
-        setCurrentPassword('');
-        setNewPassword('');
-        setConfirmNewPassword('');
-      } else {
-        setPasswordError(res?.message || 'Failed to update password.');
-      }
-    } catch (err: any) {
-      setPasswordError(err?.message || 'Failed to update password.');
-    } finally {
-      setUpdatingPassword(false);
-    }
-  };
-
-  if (loading) {
-    return (
-      <View style={styles.centerContainer}>
-        <ActivityIndicator size="large" color="#38bdf8" />
-      </View>
-    );
-  }
-
-  const handlePickProfilePhoto = async () => {
-    if (uploadingPhoto) return;
+  const handlePickPhotoInModal = async () => {
     try {
       const res = await DocumentPicker.getDocumentAsync({
         type: 'image/*',
         copyToCacheDirectory: true,
         multiple: false,
       });
-
       if (res.canceled || !res.assets || res.assets.length === 0) return;
-
       const asset = res.assets[0];
-      const uid = user?.userid || user?.id;
-      if (!uid) {
-        Alert.alert('Error', 'User ID not found. Please log in again.');
+      if (asset.size && asset.size > 5 * 1024 * 1024) {
+        setEditError('Image size must be 5MB or less.');
         return;
       }
-
-      setUploadingPhoto(true);
-      const updateRes = await usersAPI.uploadProfilePic(
-        uid,
-        asset.uri,
-        asset.name,
-        asset.mimeType || 'image/jpeg'
-      );
-
-      if (updateRes && (updateRes.success || updateRes.user)) {
-        await loadUser();
-        Alert.alert('Photo Updated', 'Your profile photo has been updated successfully.');
-      } else {
-        Alert.alert('Upload Failed', updateRes?.message || 'Could not update profile photo.');
-      }
+      setPickedPhotoAsset(asset);
+      setEditError('');
     } catch (err: any) {
-      console.error('Error updating profile photo:', err);
-      Alert.alert('Error', err?.message || 'Failed to update profile photo.');
-    } finally {
-      setUploadingPhoto(false);
+      setEditError(err?.message || 'Failed to pick image.');
     }
   };
 
-  const isAuditor = Boolean(user?.isAuditor);
-  const fullName =
-    `${user?.firstname || user?.FirstName || ''} ${user?.lastname || user?.LastName || ''}`.trim() ||
-    user?.Email ||
-    user?.email ||
-    'Compliance User';
+  const handleSaveEditProfile = async () => {
+    if (!editFirstName.trim() || !editLastName.trim() || !editEmail.trim()) {
+      setEditError('First name, last name, and email are required.');
+      return;
+    }
 
-  const initial = (fullName.charAt(0) || 'U').toUpperCase();
-  const avatarUrl = getProfilePicUrl(user);
+    const uid = user?.UserID || user?.userid || user?.id;
+    if (!uid) {
+      setEditError('User ID not found.');
+      return;
+    }
+
+    setSavingProfile(true);
+    setEditError('');
+    try {
+      // Upload photo first if selected
+      if (pickedPhotoAsset) {
+        await usersAPI.uploadProfilePic(
+          uid,
+          pickedPhotoAsset.uri,
+          pickedPhotoAsset.name || 'profile.jpg',
+          pickedPhotoAsset.mimeType || 'image/jpeg'
+        );
+      }
+
+      const payload = {
+        firstname: editFirstName.trim(),
+        middleinitial: editMiddleInitial.trim() || null,
+        lastname: editLastName.trim(),
+        email: editEmail.trim(),
+        Email: editEmail.trim(),
+      };
+
+      const res = await usersAPI.updateUser(uid, payload);
+      if (res?.success || res?.user) {
+        await loadUser();
+        setIsEditOpen(false);
+        Alert.alert('Success', 'Profile updated successfully!');
+      } else {
+        setEditError(res?.message || 'Failed to update profile.');
+      }
+    } catch (err: any) {
+      setEditError(err?.response?.data?.message || err?.message || 'Failed to update profile.');
+    } finally {
+      setSavingProfile(false);
+    }
+  };
+
+  // Password validation & strength helpers matching Web ChangePasswordCard.jsx
+  const getPasswordStrength = (pw: string) => {
+    if (!pw) return { label: '', color: '#e2e8f0', textColor: '#64748b', bars: 0 };
+    let score = 0;
+    if (pw.length >= 6) score++;
+    if (pw.length >= 10) score++;
+    if (/[A-Z]/.test(pw) && /[a-z]/.test(pw)) score++;
+    if (/\d/.test(pw) || /[^A-Za-z0-9]/.test(pw)) score++;
+
+    if (score <= 1) return { label: 'Weak', color: '#ef4444', textColor: '#dc2626', bars: 1 };
+    if (score === 2) return { label: 'Fair', color: '#f59e0b', textColor: '#d97706', bars: 2 };
+    if (score === 3) return { label: 'Good', color: '#3b82f6', textColor: '#2563eb', bars: 3 };
+    return { label: 'Strong', color: '#10b981', textColor: '#059669', bars: 4 };
+  };
+
+  const strength = getPasswordStrength(newPassword);
+
+  const validateBeforeOtp = () => {
+    if (!currentPassword.trim()) {
+      setPwStatus({ type: 'error', message: 'Please enter your current password.' });
+      return false;
+    }
+    if (!newPassword.trim()) {
+      setPwStatus({ type: 'error', message: 'Please enter a new password.' });
+      return false;
+    }
+    if (newPassword.length < 6) {
+      setPwStatus({
+        type: 'error',
+        message: 'New password must be at least 6 characters long.',
+      });
+      return false;
+    }
+    if (newPassword !== confirmPassword) {
+      setPwStatus({
+        type: 'error',
+        message: 'New password and confirmation do not match.',
+      });
+      return false;
+    }
+    if (currentPassword === newPassword) {
+      setPwStatus({
+        type: 'error',
+        message: 'New password must be different from your current password.',
+      });
+      return false;
+    }
+    return true;
+  };
+
+  const handleSendOtp = async () => {
+    setPwStatus({ type: '', message: '' });
+    if (!validateBeforeOtp()) return;
+
+    try {
+      setSendingOtp(true);
+      const res = await usersAPI.sendChangePasswordOtp({ currentPassword });
+      if (res?.success) {
+        setOtpSent(true);
+        setCooldown(60);
+        setPwStatus({
+          type: 'success',
+          message: res.message || 'Verification code sent to your email address.',
+        });
+      } else {
+        setPwStatus({
+          type: 'error',
+          message: res?.message || 'Failed to send verification code.',
+        });
+      }
+    } catch (error: any) {
+      setPwStatus({
+        type: 'error',
+        message:
+          error?.response?.data?.message ||
+          error?.message ||
+          'Failed to send verification code.',
+      });
+    } finally {
+      setSendingOtp(false);
+    }
+  };
+
+  const handleClearPasswordFields = () => {
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setOtp('');
+    setOtpSent(false);
+    setPwStatus({ type: '', message: '' });
+  };
+
+  const handleVerifyAndSavePassword = async () => {
+    setPwStatus({ type: '', message: '' });
+    if (!validateBeforeOtp()) return;
+
+    if (!otp || otp.trim().length < 6) {
+      setPwStatus({
+        type: 'error',
+        message: 'Please enter the 6-digit OTP sent to your email.',
+      });
+      return;
+    }
+
+    try {
+      setSavingPassword(true);
+      const res = await usersAPI.verifyAndChangePassword({
+        currentPassword,
+        newPassword,
+        otp: otp.trim(),
+      });
+
+      if (res?.success) {
+        setPwStatus({
+          type: 'success',
+          message: res.message || 'Your password has been changed successfully!',
+        });
+        setCurrentPassword('');
+        setNewPassword('');
+        setConfirmPassword('');
+        setOtp('');
+        setOtpSent(false);
+        setCooldown(0);
+      } else {
+        setPwStatus({
+          type: 'error',
+          message: res?.message || 'Failed to update password.',
+        });
+      }
+    } catch (error: any) {
+      setPwStatus({
+        type: 'error',
+        message:
+          error?.response?.data?.message ||
+          error?.message ||
+          'Failed to update password.',
+      });
+    } finally {
+      setSavingPassword(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <View style={styles.centerContainer}>
+        <ActivityIndicator size="large" color="#2563eb" />
+      </View>
+    );
+  }
+
+  const fullName = user
+    ? `${user.FirstName || user.firstname || ''} ${
+        user.MiddleInitial || user.middleinitial
+          ? `${user.MiddleInitial || user.middleinitial}. `
+          : ''
+      }${user.LastName || user.lastname || ''}`.trim()
+    : 'Not logged in';
+
+  const roleName =
+    user?.RoleName ||
+    user?.rolename ||
+    (user?.roleid === 1
+      ? 'Admin'
+      : user?.roleid === 2
+      ? 'Office Head'
+      : user?.roleid === 3
+      ? 'Staff'
+      : user?.roleid === 4
+      ? 'Auditor'
+      : 'Office Personnel');
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      {/* ─── Profile Summary Card (Matching Web Profile.jsx) ─── */}
-      <View style={[styles.profileCard, { padding: 0, overflow: 'hidden' }]}>
-        <View style={{ padding: 20, width: '100%', alignItems: 'center', borderBottomWidth: 1, borderBottomColor: '#e2e8f0' }}>
-          <View style={styles.avatarContainer}>
-            <TouchableOpacity
-              onPress={handlePickProfilePhoto}
-              activeOpacity={0.85}
-            >
-              <SmartUserAvatar
-                user={user}
-                fullName={fullName}
-                size={78}
-                textSize={26}
-                ring={isAuditor ? '#93c5fd' : '#e2e8f0'}
-              />
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.avatarEditBadge}
-              onPress={handlePickProfilePhoto}
-              disabled={uploadingPhoto}
-              activeOpacity={0.8}
-            >
-              {uploadingPhoto ? (
-                <ActivityIndicator size="small" color="#ffffff" />
-              ) : (
-                <MaterialIcons name="camera-alt" size={13} color="#ffffff" />
-              )}
-            </TouchableOpacity>
-          </View>
-
-          <Text style={styles.name}>{fullName}</Text>
-          <Text style={styles.email}>{user?.Email || user?.email || ''}</Text>
-
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, flexWrap: 'wrap', justifyContent: 'center' }}>
-            <View
-              style={[
-                styles.roleBadge,
-                { marginTop: 0 },
-                isAuditor ? styles.roleBadgeAuditor : styles.roleBadgePersonnel,
-              ]}
-            >
-              <MaterialIcons
-                name={isAuditor ? 'verified-user' : 'badge'}
-                size={14}
-                color={isAuditor ? '#38bdf8' : '#34d399'}
-              />
-              <Text
-                style={[
-                  styles.roleText,
-                  isAuditor ? styles.roleTextAuditor : styles.roleTextPersonnel,
-                ]}
-              >
-                {isAuditor ? 'External Auditor' : 'Office Personnel'}
+      {/* ─── Single Main Profile Card (1:1 Match with Web Profile.jsx) ─── */}
+      <View style={styles.articleCard}>
+        {/* Top Summary Header */}
+        <View style={styles.topHeaderSection}>
+          <View style={styles.userLeftRow}>
+            <SmartUserAvatar
+              user={user}
+              fullName={fullName}
+              size={56}
+              textSize={18}
+              ring="#f1f5f9"
+            />
+            <View style={{ flex: 1, marginLeft: 14 }}>
+              <Text style={styles.myAccountTag}>MY ACCOUNT</Text>
+              <View style={styles.nameAndRoleRow}>
+                <Text style={styles.fullNameText}>{fullName}</Text>
+                <View style={styles.rolePill}>
+                  <View style={styles.roleEmeraldDot} />
+                  <Text style={styles.rolePillText}>{roleName}</Text>
+                </View>
+              </View>
+              <Text style={styles.emailSubText} numberOfLines={1}>
+                {user?.Email || user?.email || ''}
               </Text>
             </View>
-
-            <TouchableOpacity
-              style={{
-                flexDirection: 'row',
-                alignItems: 'center',
-                gap: 5,
-                backgroundColor: '#2563eb',
-                paddingHorizontal: 12,
-                paddingVertical: 6,
-                borderRadius: 10,
-              }}
-              onPress={() => router.push('/edit-profile')}
-              activeOpacity={0.85}
-            >
-              <MaterialIcons name="edit" size={13} color="#ffffff" />
-              <Text style={{ fontSize: 12, fontWeight: '700', color: '#ffffff' }}>Edit profile</Text>
-            </TouchableOpacity>
           </View>
+
+          <TouchableOpacity
+            style={styles.editProfileBtn}
+            onPress={openEditProfileModal}
+            activeOpacity={0.85}
+          >
+            <MaterialIcons name="edit" size={14} color="#ffffff" />
+            <Text style={styles.editProfileBtnText}>Edit profile</Text>
+          </TouchableOpacity>
         </View>
 
         {/* ─── Profile Options Navigation Bar (Matching Web Profile.jsx) ─── */}
-        <View
-          style={{
-            flexDirection: 'row',
-            width: '100%',
-            backgroundColor: '#f8fafc',
-            borderBottomWidth: 1,
-            borderBottomColor: '#e2e8f0',
-            paddingHorizontal: 12,
-            paddingTop: 6,
-            gap: 6,
-          }}
-        >
+        <View style={styles.tabsBar}>
           <TouchableOpacity
             onPress={() => setActiveTab('overview')}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              borderBottomWidth: 2,
-              borderBottomColor: activeTab === 'overview' ? '#2563eb' : 'transparent',
-              backgroundColor: activeTab === 'overview' ? '#ffffff' : 'transparent',
-              borderTopLeftRadius: 8,
-              borderTopRightRadius: 8,
-            }}
+            style={[
+              styles.tabButton,
+              activeTab === 'overview' && styles.tabButtonActive,
+            ]}
             activeOpacity={0.8}
           >
             <MaterialIcons
               name="person-outline"
-              size={15}
+              size={16}
               color={activeTab === 'overview' ? '#2563eb' : '#64748b'}
             />
             <Text
-              style={{
-                fontSize: 12,
-                fontWeight: activeTab === 'overview' ? '700' : '600',
-                color: activeTab === 'overview' ? '#2563eb' : '#64748b',
-              }}
+              style={[
+                styles.tabButtonText,
+                activeTab === 'overview' && styles.tabButtonTextActive,
+              ]}
             >
               Account Information
             </Text>
@@ -349,31 +404,22 @@ export default function AccountScreen() {
 
           <TouchableOpacity
             onPress={() => setActiveTab('password')}
-            style={{
-              flexDirection: 'row',
-              alignItems: 'center',
-              gap: 6,
-              paddingHorizontal: 12,
-              paddingVertical: 10,
-              borderBottomWidth: 2,
-              borderBottomColor: activeTab === 'password' ? '#2563eb' : 'transparent',
-              backgroundColor: activeTab === 'password' ? '#ffffff' : 'transparent',
-              borderTopLeftRadius: 8,
-              borderTopRightRadius: 8,
-            }}
+            style={[
+              styles.tabButton,
+              activeTab === 'password' && styles.tabButtonActive,
+            ]}
             activeOpacity={0.8}
           >
             <MaterialIcons
               name="vpn-key"
-              size={15}
+              size={16}
               color={activeTab === 'password' ? '#2563eb' : '#64748b'}
             />
             <Text
-              style={{
-                fontSize: 12,
-                fontWeight: activeTab === 'password' ? '700' : '600',
-                color: activeTab === 'password' ? '#2563eb' : '#64748b',
-              }}
+              style={[
+                styles.tabButtonText,
+                activeTab === 'password' && styles.tabButtonTextActive,
+              ]}
             >
               Password &amp; Security
             </Text>
@@ -382,267 +428,515 @@ export default function AccountScreen() {
 
         {/* ─── Tab Content ─── */}
         {activeTab === 'overview' ? (
-          <View style={{ padding: 16, width: '100%' }}>
-            <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>
-              Account information
-            </Text>
-            <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2, marginBottom: 12 }}>
+          <View style={styles.overviewBody}>
+            <Text style={styles.overviewHeading}>Account information</Text>
+            <Text style={styles.overviewSubheading}>
               Basic information connected to your login.
             </Text>
 
-            <View style={{ gap: 8 }}>
-              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Full name</Text>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>{fullName}</Text>
+            <View style={styles.infoGrid}>
+              <View style={styles.infoBox}>
+                <Text style={styles.infoBoxLabel}>Full name</Text>
+                <Text style={styles.infoBoxValue}>{fullName || '-'}</Text>
               </View>
-              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Email address</Text>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>{user?.Email || user?.email || '-'}</Text>
-              </View>
-              <View style={{ backgroundColor: '#f8fafc', borderWidth: 1, borderColor: '#e2e8f0', borderRadius: 10, padding: 10 }}>
-                <Text style={{ fontSize: 10, fontWeight: '700', color: '#64748b', textTransform: 'uppercase' }}>Role</Text>
-                <Text style={{ fontSize: 13, fontWeight: '600', color: '#0f172a', marginTop: 2 }}>
-                  {isAuditor ? 'External Auditor' : 'Office Personnel'}
+              <View style={styles.infoBox}>
+                <Text style={styles.infoBoxLabel}>Email address</Text>
+                <Text style={styles.infoBoxValue}>
+                  {user?.Email || user?.email || '-'}
                 </Text>
+              </View>
+              <View style={styles.infoBox}>
+                <Text style={styles.infoBoxLabel}>Role</Text>
+                <Text style={styles.infoBoxValue}>{roleName}</Text>
               </View>
             </View>
           </View>
         ) : (
-          <View style={{ padding: 16, width: '100%' }}>
-            <Text style={{ fontSize: 14, fontWeight: '700', color: '#0f172a' }}>
-              Password &amp; Security
-            </Text>
-            <Text style={{ fontSize: 11, color: '#64748b', marginTop: 2, marginBottom: 12 }}>
-              Ensure your new password contains at least 6 characters.
-            </Text>
+          /* ─── 1:1 Web ChangePasswordCard.jsx ─── */
+          <View style={styles.passwordTabWrap}>
+            <View style={styles.changePwCard}>
+              {/* Card Header */}
+              <View style={styles.changePwHeader}>
+                <View style={styles.changePwHeaderLeft}>
+                  <View style={styles.changePwIconBox}>
+                    <MaterialIcons name="vpn-key" size={18} color="#4f46e5" />
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.changePwTitle}>Password &amp; Security</Text>
+                    <Text style={styles.changePwSubtitle}>
+                      Update your account password using email OTP verification
+                    </Text>
+                  </View>
+                </View>
 
-            {passwordError ? (
-              <View style={styles.errorBox}>
-                <MaterialIcons name="error-outline" size={16} color="#ef4444" />
-                <Text style={styles.errorText}>{passwordError}</Text>
+                {otpSent ? (
+                  <View style={styles.otpVerifiedPill}>
+                    <View style={styles.otpVerifiedDot} />
+                    <Text style={styles.otpVerifiedText}>OTP Sent to Email</Text>
+                  </View>
+                ) : null}
               </View>
-            ) : null}
 
-            <Text style={styles.inputLabel}>Current Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Enter current password"
-              placeholderTextColor="#64748b"
-              value={currentPassword}
-              onChangeText={setCurrentPassword}
-            />
+              {/* Form Body */}
+              <View style={styles.changePwBody}>
+                {/* Status Banner */}
+                {pwStatus.message ? (
+                  <View
+                    style={[
+                      styles.pwStatusBanner,
+                      pwStatus.type === 'error'
+                        ? styles.pwStatusBannerError
+                        : styles.pwStatusBannerSuccess,
+                    ]}
+                  >
+                    <MaterialIcons
+                      name={pwStatus.type === 'error' ? 'error' : 'check-circle'}
+                      size={16}
+                      color={pwStatus.type === 'error' ? '#ef4444' : '#10b981'}
+                    />
+                    <Text
+                      style={[
+                        styles.pwStatusText,
+                        pwStatus.type === 'error'
+                          ? { color: '#b91c1c' }
+                          : { color: '#047857' },
+                      ]}
+                    >
+                      {pwStatus.message}
+                    </Text>
+                  </View>
+                ) : null}
 
-            <Text style={styles.inputLabel}>New Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Enter new password"
-              placeholderTextColor="#64748b"
-              value={newPassword}
-              onChangeText={setNewPassword}
-            />
+                {/* 1. Current Password */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Current Password</Text>
+                  <View
+                    style={[
+                      styles.pwInputContainer,
+                      otpSent && styles.pwInputContainerDisabled,
+                    ]}
+                  >
+                    <MaterialIcons
+                      name="lock-outline"
+                      size={16}
+                      color="#94a3b8"
+                      style={{ marginRight: 8 }}
+                    />
+                    <TextInput
+                      style={styles.pwTextInput}
+                      secureTextEntry={!showCurrentPassword}
+                      value={currentPassword}
+                      onChangeText={(text) => {
+                        setCurrentPassword(text);
+                        if (otpSent) setOtpSent(false);
+                      }}
+                      placeholder="Enter your current password"
+                      placeholderTextColor="#94a3b8"
+                      editable={!otpSent}
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      onPress={() => setShowCurrentPassword((p) => !p)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <MaterialIcons
+                        name={showCurrentPassword ? 'visibility-off' : 'visibility'}
+                        size={18}
+                        color="#94a3b8"
+                      />
+                    </TouchableOpacity>
+                  </View>
+                  {otpSent ? (
+                    <View style={styles.verifiedSubRow}>
+                      <MaterialIcons name="check-circle" size={14} color="#059669" />
+                      <Text style={styles.verifiedSubText}>Password verified</Text>
+                    </View>
+                  ) : null}
+                </View>
 
-            <Text style={styles.inputLabel}>Confirm New Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Re-enter new password"
-              placeholderTextColor="#64748b"
-              value={confirmNewPassword}
-              onChangeText={setConfirmNewPassword}
-            />
+                {/* 2. New Password */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>New Password</Text>
+                  <View style={styles.pwInputContainer}>
+                    <MaterialIcons
+                      name="lock-outline"
+                      size={16}
+                      color="#94a3b8"
+                      style={{ marginRight: 8 }}
+                    />
+                    <TextInput
+                      style={styles.pwTextInput}
+                      secureTextEntry={!showNewPassword}
+                      value={newPassword}
+                      onChangeText={setNewPassword}
+                      placeholder="Enter new password"
+                      placeholderTextColor="#94a3b8"
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      onPress={() => setShowNewPassword((p) => !p)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <MaterialIcons
+                        name={showNewPassword ? 'visibility-off' : 'visibility'}
+                        size={18}
+                        color="#94a3b8"
+                      />
+                    </TouchableOpacity>
+                  </View>
 
-            <View style={{ flexDirection: 'row', justifyContent: 'flex-end', marginTop: 14 }}>
-              <TouchableOpacity
-                style={styles.modalSaveBtn}
-                onPress={handleChangePassword}
-                disabled={updatingPassword}
-              >
-                {updatingPassword ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.modalSaveBtnText}>Update Password</Text>
-                )}
-              </TouchableOpacity>
+                  {/* 4-Bar Password Strength Indicator */}
+                  {newPassword ? (
+                    <View style={{ marginTop: 8 }}>
+                      <View style={styles.strengthBarsRow}>
+                        {[1, 2, 3, 4].map((bar) => (
+                          <View
+                            key={bar}
+                            style={[
+                              styles.strengthBarSegment,
+                              {
+                                backgroundColor:
+                                  bar <= strength.bars ? strength.color : '#e2e8f0',
+                              },
+                            ]}
+                          />
+                        ))}
+                      </View>
+                      <View style={styles.strengthLabelsRow}>
+                        <Text
+                          style={[
+                            styles.strengthStatusLabel,
+                            { color: strength.textColor },
+                          ]}
+                        >
+                          {strength.label}
+                        </Text>
+                        <Text style={styles.strengthMinLabel}>Min. 6 characters</Text>
+                      </View>
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* 3. Confirm New Password */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Confirm New Password</Text>
+                  <View style={styles.pwInputContainer}>
+                    <MaterialIcons
+                      name="lock-outline"
+                      size={16}
+                      color="#94a3b8"
+                      style={{ marginRight: 8 }}
+                    />
+                    <TextInput
+                      style={styles.pwTextInput}
+                      secureTextEntry={!showConfirmPassword}
+                      value={confirmPassword}
+                      onChangeText={setConfirmPassword}
+                      placeholder="Re-enter new password"
+                      placeholderTextColor="#94a3b8"
+                      autoCapitalize="none"
+                    />
+                    <TouchableOpacity
+                      onPress={() => setShowConfirmPassword((p) => !p)}
+                      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                    >
+                      <MaterialIcons
+                        name={showConfirmPassword ? 'visibility-off' : 'visibility'}
+                        size={18}
+                        color="#94a3b8"
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  {confirmPassword ? (
+                    <Text
+                      style={[
+                        styles.matchIndicatorText,
+                        confirmPassword === newPassword
+                          ? { color: '#059669' }
+                          : { color: '#ef4444' },
+                      ]}
+                    >
+                      {confirmPassword === newPassword
+                        ? '✓ Passwords match'
+                        : '✕ Passwords do not match'}
+                    </Text>
+                  ) : null}
+                </View>
+
+                {/* 4. OTP Verification Box (Matching Web ChangePasswordCard.jsx) */}
+                <View style={styles.otpBox}>
+                  <View style={styles.otpBoxHeader}>
+                    <View style={{ flex: 1, marginRight: 10 }}>
+                      <Text style={styles.otpBoxTitle}>Email OTP Verification</Text>
+                      <Text style={styles.otpBoxDesc}>
+                        We&apos;ll send a 6-digit verification code to{' '}
+                        <Text style={{ fontWeight: '700', color: '#334155' }}>
+                          {user?.Email || user?.email || 'your email'}
+                        </Text>{' '}
+                        to authorize this change.
+                      </Text>
+                    </View>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.sendOtpBtn,
+                        otpSent ? styles.sendOtpBtnResend : styles.sendOtpBtnPrimary,
+                        (sendingOtp || cooldown > 0) && styles.btnDisabled,
+                      ]}
+                      onPress={handleSendOtp}
+                      disabled={sendingOtp || cooldown > 0}
+                      activeOpacity={0.85}
+                    >
+                      {sendingOtp ? (
+                        <ActivityIndicator
+                          size="small"
+                          color={otpSent ? '#1d4ed8' : '#ffffff'}
+                        />
+                      ) : (
+                        <MaterialIcons
+                          name="mail-outline"
+                          size={14}
+                          color={otpSent ? '#1d4ed8' : '#ffffff'}
+                        />
+                      )}
+                      <Text
+                        style={[
+                          styles.sendOtpBtnText,
+                          otpSent ? { color: '#1d4ed8' } : { color: '#ffffff' },
+                        ]}
+                      >
+                        {sendingOtp
+                          ? 'Sending...'
+                          : cooldown > 0
+                          ? `Resend (${cooldown}s)`
+                          : otpSent
+                          ? 'Resend OTP'
+                          : 'Send Verification Code'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+
+                  {otpSent ? (
+                    <View style={styles.otpInputSection}>
+                      <Text style={styles.otpInputLabel}>
+                        ENTER 6-DIGIT VERIFICATION CODE
+                      </Text>
+                      <TextInput
+                        style={styles.otpCodeInput}
+                        value={otp}
+                        onChangeText={(val) =>
+                          setOtp(val.replace(/\D/g, '').slice(0, 6))
+                        }
+                        keyboardType="number-pad"
+                        maxLength={6}
+                        placeholder="000000"
+                        placeholderTextColor="#cbd5e1"
+                      />
+                    </View>
+                  ) : null}
+                </View>
+
+                {/* 5. Footer Action Buttons */}
+                <View style={styles.changePwFooter}>
+                  <Text style={styles.footerTipText}>
+                    Use a strong password you don&apos;t use elsewhere.
+                  </Text>
+                  <View style={styles.footerBtnsRow}>
+                    {(currentPassword || newPassword || confirmPassword || otp) ? (
+                      <TouchableOpacity
+                        style={styles.clearFieldsBtn}
+                        onPress={handleClearPasswordFields}
+                      >
+                        <Text style={styles.clearFieldsBtnText}>Clear Fields</Text>
+                      </TouchableOpacity>
+                    ) : null}
+
+                    <TouchableOpacity
+                      style={[
+                        styles.updatePwBtn,
+                        (!otpSent || otp.length < 6 || savingPassword) &&
+                          styles.btnDisabled,
+                      ]}
+                      onPress={handleVerifyAndSavePassword}
+                      disabled={!otpSent || otp.length < 6 || savingPassword}
+                      activeOpacity={0.85}
+                    >
+                      {savingPassword ? (
+                        <ActivityIndicator size="small" color="#ffffff" />
+                      ) : (
+                        <MaterialIcons name="check" size={15} color="#ffffff" />
+                      )}
+                      <Text style={styles.updatePwBtnText}>
+                        {savingPassword ? 'Updating...' : 'Update Password'}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                </View>
+              </View>
             </View>
           </View>
         )}
       </View>
 
-      {/* ─── Assigned Scope Section ─── */}
-      {isAuditor ? (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>ASSIGNED AUDIT SCOPE</Text>
-          {auditorAreas.length === 0 ? (
-            <View style={styles.scopeEmptyCard}>
-              <MaterialIcons name="assignment-late" size={24} color="#64748b" />
-              <Text style={styles.scopeEmptyText}>
-                No audit areas assigned yet. Contact institutional administration.
-              </Text>
-            </View>
-          ) : (
-            auditorAreas.map((area, idx) => (
-              <View key={`area-scope-${idx}`} style={styles.scopeItemCard}>
-                <View style={styles.scopeCodeBadge}>
-                  <Text style={styles.scopeCodeText}>
-                    {area.areacode || area.AreaCode || 'AREA'}
-                  </Text>
-                </View>
-                <View style={{ flex: 1, marginLeft: 10 }}>
-                  <Text style={styles.scopeName}>
-                    {area.areaname || area.AreaName || 'Assigned Area'}
-                  </Text>
-                  <Text style={styles.scopeMeta}>
-                    {area.eventname || area.EventName || 'Accreditation Event'}
-                  </Text>
-                </View>
-                <MaterialIcons name="verified" size={18} color="#2563eb" />
-              </View>
-            ))
-          )}
-        </View>
-      ) : (
-        <View style={styles.section}>
-          <Text style={styles.sectionLabel}>PERSONNEL ASSIGNMENTS</Text>
-          <View style={styles.scopeStatsRow}>
-            <View style={styles.scopeStatBox}>
-              <Text style={styles.scopeStatNumber}>
-                {(personnelScope?.assignedRequirementIds || []).length}
-              </Text>
-              <Text style={styles.scopeStatLabel}>Standards</Text>
-            </View>
-            <View style={styles.scopeStatBox}>
-              <Text style={styles.scopeStatNumber}>
-                {(personnelScope?.assignedCriteriaIds || []).length}
-              </Text>
-              <Text style={styles.scopeStatLabel}>Sub Areas</Text>
-            </View>
-            <View style={styles.scopeStatBox}>
-              <Text style={styles.scopeStatNumber}>
-                {(personnelScope?.assignedAreaIds || []).length}
-              </Text>
-              <Text style={styles.scopeStatLabel}>Areas</Text>
-            </View>
-          </View>
-        </View>
-      )}
-
-      {/* ─── Account Actions ─── */}
-      <View style={styles.section}>
-        <Text style={styles.sectionLabel}>ACCOUNT SETTINGS</Text>
-
-        <TouchableOpacity
-          style={styles.actionItem}
-          onPress={() => router.push('/edit-profile')}
-          activeOpacity={0.8}
-        >
-          <View style={styles.actionIconBox}>
-            <MaterialIcons name="person-outline" size={20} color="#2563eb" />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.actionItemTitle}>Edit Profile Information</Text>
-            <Text style={styles.actionItemSub}>Update name and details</Text>
-          </View>
-          <MaterialIcons name="chevron-right" size={22} color="#64748b" />
-        </TouchableOpacity>
-
-        <TouchableOpacity
-          style={styles.actionItem}
-          onPress={() => setShowPasswordModal(true)}
-          activeOpacity={0.8}
-        >
-          <View style={styles.actionIconBox}>
-            <MaterialIcons name="lock-outline" size={20} color="#2563eb" />
-          </View>
-          <View style={{ flex: 1, marginLeft: 12 }}>
-            <Text style={styles.actionItemTitle}>Change Password</Text>
-            <Text style={styles.actionItemSub}>Update login credentials</Text>
-          </View>
-          <MaterialIcons name="chevron-right" size={22} color="#64748b" />
-        </TouchableOpacity>
-      </View>
-
-      {/* ─── Sign Out Button ─── */}
-      <TouchableOpacity
-        style={styles.logoutBtn}
-        onPress={handleLogout}
-        activeOpacity={0.8}
+      {/* ─── Edit Profile Modal (1:1 Match with Web EditProfileModal.jsx) ─── */}
+      <Modal
+        visible={isEditOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => !savingProfile && setIsEditOpen(false)}
       >
-        <MaterialIcons name="logout" size={18} color="#dc2626" />
-        <Text style={styles.logoutBtnText}>Sign Out</Text>
-      </TouchableOpacity>
-
-      {/* ─── Change Password Modal ─── */}
-      <Modal visible={showPasswordModal} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Change Password</Text>
-            <Text style={styles.modalSub}>
-              Ensure your new password contains at least 6 characters.
-            </Text>
-
-            {passwordError ? (
-              <View style={styles.errorBox}>
-                <MaterialIcons name="error-outline" size={16} color="#ef4444" />
-                <Text style={styles.errorText}>{passwordError}</Text>
-              </View>
-            ) : null}
-
-            <Text style={styles.inputLabel}>Current Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Enter current password"
-              placeholderTextColor="#64748b"
-              value={currentPassword}
-              onChangeText={setCurrentPassword}
-            />
-
-            <Text style={styles.inputLabel}>New Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Enter new password"
-              placeholderTextColor="#64748b"
-              value={newPassword}
-              onChangeText={setNewPassword}
-            />
-
-            <Text style={styles.inputLabel}>Confirm New Password</Text>
-            <TextInput
-              style={styles.input}
-              secureTextEntry
-              placeholder="Re-enter new password"
-              placeholderTextColor="#64748b"
-              value={confirmNewPassword}
-              onChangeText={setConfirmNewPassword}
-            />
-
-            <View style={styles.modalActionsRow}>
+        <Pressable
+          style={styles.modalBackdrop}
+          onPress={() => !savingProfile && setIsEditOpen(false)}
+        >
+          <Pressable style={styles.modalCard} onPress={(e) => e.stopPropagation()}>
+            {/* Header */}
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalHeaderTitle}>Edit Profile</Text>
               <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => {
-                  setShowPasswordModal(false);
-                  setPasswordError('');
-                }}
+                onPress={() => !savingProfile && setIsEditOpen(false)}
+                disabled={savingProfile}
+                style={styles.modalCloseBtn}
               >
-                <Text style={styles.modalCancelBtnText}>Cancel</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.modalSaveBtn}
-                onPress={handleChangePassword}
-                disabled={updatingPassword}
-              >
-                {updatingPassword ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.modalSaveBtnText}>Update Password</Text>
-                )}
+                <MaterialIcons name="close" size={20} color="#94a3b8" />
               </TouchableOpacity>
             </View>
-          </View>
-        </View>
+
+            {/* Body */}
+            <ScrollView style={{ maxHeight: 460 }} contentContainerStyle={styles.modalBody}>
+              {editError ? (
+                <View style={styles.modalErrorBox}>
+                  <MaterialIcons name="error" size={16} color="#dc2626" />
+                  <Text style={styles.modalErrorText}>{editError}</Text>
+                </View>
+              ) : null}
+
+              {/* Profile Picture Uploader Row */}
+              <View style={styles.photoPickerCard}>
+                <SmartUserAvatar
+                  user={
+                    pickedPhotoAsset
+                      ? { ...user, profilepic: pickedPhotoAsset.uri }
+                      : user
+                  }
+                  fullName={`${editFirstName} ${editLastName}`.trim() || fullName}
+                  size={64}
+                  textSize={20}
+                  ring="#ffffff"
+                />
+                <View style={{ flex: 1, marginLeft: 14 }}>
+                  <Text style={styles.photoPickerTitle}>Profile Picture</Text>
+                  <Text style={styles.photoPickerSub}>
+                    JPG, PNG, WEBP or GIF (max 5MB)
+                  </Text>
+                  <View style={styles.photoBtnsRow}>
+                    <TouchableOpacity
+                      style={styles.choosePhotoBtn}
+                      onPress={handlePickPhotoInModal}
+                      disabled={savingProfile}
+                    >
+                      <Text style={styles.choosePhotoBtnText}>Choose Photo</Text>
+                    </TouchableOpacity>
+                    {pickedPhotoAsset ? (
+                      <TouchableOpacity
+                        style={styles.resetPhotoBtn}
+                        onPress={() => setPickedPhotoAsset(null)}
+                        disabled={savingProfile}
+                      >
+                        <Text style={styles.resetPhotoBtnText}>Reset</Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              </View>
+
+              {/* Name Fields Grid */}
+              <View style={styles.nameFieldsRow}>
+                <View style={{ flex: 2 }}>
+                  <Text style={styles.modalFieldLabel}>
+                    First Name <Text style={{ color: '#ef4444' }}>*</Text>
+                  </Text>
+                  <TextInput
+                    style={styles.modalInput}
+                    value={editFirstName}
+                    onChangeText={setEditFirstName}
+                    placeholder="First name"
+                    placeholderTextColor="#94a3b8"
+                    editable={!savingProfile}
+                  />
+                </View>
+
+                <View style={{ flex: 1, marginLeft: 10 }}>
+                  <Text style={styles.modalFieldLabel}>Middle Initial</Text>
+                  <TextInput
+                    style={[styles.modalInput, { textAlign: 'center' }]}
+                    value={editMiddleInitial}
+                    onChangeText={setEditMiddleInitial}
+                    maxLength={5}
+                    placeholder="M.I."
+                    placeholderTextColor="#94a3b8"
+                    editable={!savingProfile}
+                  />
+                </View>
+              </View>
+
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.modalFieldLabel}>
+                  Last Name <Text style={{ color: '#ef4444' }}>*</Text>
+                </Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={editLastName}
+                  onChangeText={setEditLastName}
+                  placeholder="Last name"
+                  placeholderTextColor="#94a3b8"
+                  editable={!savingProfile}
+                />
+              </View>
+
+              <View style={{ marginTop: 12 }}>
+                <Text style={styles.modalFieldLabel}>
+                  Email Address <Text style={{ color: '#ef4444' }}>*</Text>
+                </Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={editEmail}
+                  onChangeText={setEditEmail}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                  placeholder="Email address"
+                  placeholderTextColor="#94a3b8"
+                  editable={!savingProfile}
+                />
+              </View>
+
+              {/* Footer Actions */}
+              <View style={styles.modalFooterActions}>
+                <TouchableOpacity
+                  style={styles.modalCancelBtn}
+                  onPress={() => setIsEditOpen(false)}
+                  disabled={savingProfile}
+                >
+                  <Text style={styles.modalCancelBtnText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalSaveBtn, savingProfile && styles.btnDisabled]}
+                  onPress={handleSaveEditProfile}
+                  disabled={savingProfile}
+                >
+                  {savingProfile ? (
+                    <ActivityIndicator size="small" color="#ffffff" />
+                  ) : null}
+                  <Text style={styles.modalSaveBtnText}>
+                    {savingProfile ? 'Saving...' : 'Save Changes'}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </Pressable>
+        </Pressable>
       </Modal>
     </ScrollView>
   );
@@ -655,7 +949,6 @@ const styles = StyleSheet.create({
   },
   content: {
     padding: 16,
-    paddingTop: Platform.OS === 'ios' ? 60 : 44,
     paddingBottom: 40,
   },
   centerContainer: {
@@ -664,337 +957,607 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     backgroundColor: '#f8fafc',
   },
-  profileCard: {
+  articleCard: {
     backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 22,
-    alignItems: 'center',
+    borderRadius: 12,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    marginBottom: 20,
-    shadowColor: '#000',
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 1 },
     shadowOpacity: 0.05,
     shadowRadius: 2,
     elevation: 1,
   },
-  avatarContainer: {
-    position: 'relative',
-    marginBottom: 12,
-  },
-  avatar: {
-    width: 78,
-    height: 78,
-    borderRadius: 39,
-    backgroundColor: '#2563eb',
-    alignItems: 'center',
-    justifyContent: 'center',
-    overflow: 'hidden',
-    borderWidth: 2,
-    borderColor: '#e2e8f0',
-  },
-  avatarAuditor: {
-    backgroundColor: '#1d4ed8',
-    borderColor: '#93c5fd',
-  },
-  avatarImage: {
-    width: '100%',
-    height: '100%',
-  },
-  avatarEditBadge: {
-    position: 'absolute',
-    bottom: -2,
-    right: -2,
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#2563eb',
-    borderWidth: 2,
-    borderColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    shadowColor: '#000',
-    shadowOpacity: 0.15,
-    shadowOffset: { width: 0, height: 2 },
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  avatarText: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  name: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#0f172a',
-    letterSpacing: -0.3,
-  },
-  email: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 3,
-  },
-  roleBadge: {
+  topHeaderSection: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 12,
+  },
+  userLeftRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+    minWidth: 200,
+  },
+  myAccountTag: {
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#64748b',
+    letterSpacing: 0.6,
+    textTransform: 'uppercase',
+  },
+  nameAndRoleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 2,
+  },
+  fullNameText: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  rolePill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 999,
+    backgroundColor: '#f1f5f9',
+  },
+  roleEmeraldDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+  },
+  rolePillText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  emailSubText: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+  },
+  editProfileBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#2563eb',
+    paddingHorizontal: 14,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  editProfileBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  tabsBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    backgroundColor: 'rgba(248, 250, 252, 0.7)',
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
+  },
+  tabButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    borderBottomWidth: 2,
+    borderBottomColor: 'transparent',
+    borderTopLeftRadius: 8,
+    borderTopRightRadius: 8,
+  },
+  tabButtonActive: {
+    borderBottomColor: '#2563eb',
+    backgroundColor: '#ffffff',
+  },
+  tabButtonText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  tabButtonTextActive: {
+    color: '#2563eb',
+  },
+  overviewBody: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+  },
+  overviewHeading: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  overviewSubheading: {
+    fontSize: 12,
+    color: '#64748b',
+    marginTop: 2,
+    marginBottom: 14,
+  },
+  infoGrid: {
+    gap: 10,
+  },
+  infoBox: {
+    backgroundColor: 'rgba(248, 250, 252, 0.7)',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    borderRadius: 8,
     paddingHorizontal: 12,
-    paddingVertical: 5,
-    borderRadius: 14,
-    marginTop: 10,
+    paddingVertical: 10,
+  },
+  infoBoxLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  infoBoxValue: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#0f172a',
+    marginTop: 2,
+  },
+  // Password & Security Tab (Matching Web ChangePasswordCard.jsx)
+  passwordTabWrap: {
+    padding: 16,
+  },
+  changePwCard: {
+    backgroundColor: '#ffffff',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    overflow: 'hidden',
+  },
+  changePwHeader: {
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#f1f5f9',
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  changePwHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    flex: 1,
+  },
+  changePwIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#eef2ff',
+    borderWidth: 1,
+    borderColor: '#e0e7ff',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  changePwTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  changePwSubtitle: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 1,
+  },
+  otpVerifiedPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: '#ecfdf5',
+    borderWidth: 1,
+    borderColor: '#d1fae5',
+  },
+  otpVerifiedDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#10b981',
+  },
+  otpVerifiedText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#047857',
+  },
+  changePwBody: {
+    padding: 16,
+    gap: 14,
+  },
+  pwStatusBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    borderRadius: 8,
     borderWidth: 1,
   },
-  roleBadgeAuditor: {
-    backgroundColor: '#eff6ff',
-    borderColor: '#bfdbfe',
+  pwStatusBannerError: {
+    backgroundColor: '#fef2f2',
+    borderColor: '#fecaca',
   },
-  roleBadgePersonnel: {
+  pwStatusBannerSuccess: {
     backgroundColor: '#ecfdf5',
     borderColor: '#a7f3d0',
   },
-  roleText: {
+  pwStatusText: {
+    flex: 1,
     fontSize: 12,
-    fontWeight: '700',
-    marginLeft: 5,
+    fontWeight: '600',
+    lineHeight: 17,
   },
-  roleTextAuditor: {
-    color: '#1d4ed8',
-  },
-  roleTextPersonnel: {
-    color: '#059669',
-  },
-  section: {
-    marginBottom: 20,
-  },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#475569',
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-    marginBottom: 10,
-    paddingLeft: 4,
-  },
-  scopeEmptyCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 16,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-  },
-  scopeEmptyText: {
+  fieldGroup: {},
+  fieldLabel: {
     fontSize: 12,
-    color: '#64748b',
-    textAlign: 'center',
-    marginTop: 6,
+    fontWeight: '600',
+    color: '#334155',
+    marginBottom: 6,
   },
-  scopeItemCard: {
+  pwInputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 8,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 2,
-    elevation: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    backgroundColor: '#ffffff',
   },
-  scopeCodeBadge: {
-    backgroundColor: '#2563eb',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 6,
+  pwInputContainerDisabled: {
+    backgroundColor: '#f8fafc',
   },
-  scopeCodeText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#ffffff',
-  },
-  scopeName: {
+  pwTextInput: {
+    flex: 1,
+    paddingVertical: 10,
     fontSize: 13,
-    fontWeight: '700',
     color: '#0f172a',
   },
-  scopeMeta: {
-    fontSize: 11,
-    color: '#64748b',
-    marginTop: 2,
-  },
-  scopeStatsRow: {
+  verifiedSubRow: {
     flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 5,
+  },
+  verifiedSubText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#059669',
+  },
+  strengthBarsRow: {
+    flexDirection: 'row',
+    gap: 4,
+    marginBottom: 4,
+  },
+  strengthBarSegment: {
+    flex: 1,
+    height: 5,
+    borderRadius: 3,
+  },
+  strengthLabelsRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  strengthStatusLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+  },
+  strengthMinLabel: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  matchIndicatorText: {
+    fontSize: 11,
+    fontWeight: '600',
+    marginTop: 5,
+  },
+  otpBox: {
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#dbeafe',
+    backgroundColor: 'rgba(239, 246, 255, 0.7)',
+    padding: 14,
+  },
+  otpBoxHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    flexWrap: 'wrap',
     gap: 10,
   },
-  scopeStatBox: {
-    flex: 1,
-    backgroundColor: '#ffffff',
-    borderRadius: 12,
-    padding: 14,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  scopeStatNumber: {
-    fontSize: 18,
-    fontWeight: '800',
-    color: '#059669',
-  },
-  scopeStatLabel: {
-    fontSize: 11,
-    color: '#64748b',
-    fontWeight: '600',
-    marginTop: 3,
-  },
-  actionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#ffffff',
-    borderRadius: 14,
-    padding: 14,
-    marginBottom: 10,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.03,
-    shadowRadius: 2,
-    elevation: 1,
-  },
-  actionIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 10,
-    backgroundColor: '#eff6ff',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  actionItemTitle: {
-    fontSize: 14,
+  otpBoxTitle: {
+    fontSize: 12,
     fontWeight: '700',
-    color: '#0f172a',
+    color: '#1e293b',
   },
-  actionItemSub: {
+  otpBoxDesc: {
     fontSize: 11,
     color: '#64748b',
     marginTop: 2,
+    lineHeight: 16,
   },
-  logoutBtn: {
+  sendOtpBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#fef2f2',
-    paddingVertical: 14,
-    borderRadius: 14,
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+  },
+  sendOtpBtnPrimary: {
+    backgroundColor: '#2563eb',
+  },
+  sendOtpBtnResend: {
+    backgroundColor: '#ffffff',
     borderWidth: 1,
-    borderColor: '#fecaca',
-    marginTop: 10,
+    borderColor: '#93c5fd',
   },
-  logoutBtnText: {
-    fontSize: 14,
+  sendOtpBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+  },
+  otpInputSection: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: 'rgba(191, 219, 254, 0.8)',
+  },
+  otpInputLabel: {
+    fontSize: 10,
     fontWeight: '700',
-    color: '#dc2626',
-    marginLeft: 8,
+    color: '#334155',
+    letterSpacing: 0.5,
+    marginBottom: 6,
   },
-  modalOverlay: {
+  otpCodeInput: {
+    width: 180,
+    backgroundColor: '#ffffff',
+    borderWidth: 1,
+    borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    textAlign: 'center',
+    fontSize: 16,
+    fontWeight: '700',
+    letterSpacing: 6,
+    color: '#0f172a',
+  },
+  changePwFooter: {
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
+    gap: 10,
+  },
+  footerTipText: {
+    fontSize: 11,
+    color: '#94a3b8',
+  },
+  footerBtnsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+    gap: 8,
+  },
+  clearFieldsBtn: {
+    paddingHorizontal: 12,
+    paddingVertical: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
+  },
+  clearFieldsBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  updatePwBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 8,
+    backgroundColor: '#2563eb',
+  },
+  updatePwBtnText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#ffffff',
+  },
+  btnDisabled: {
+    opacity: 0.5,
+  },
+  // Edit Profile Modal (Matching Web EditProfileModal.jsx)
+  modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    backgroundColor: 'rgba(15, 23, 42, 0.55)',
     justifyContent: 'center',
     alignItems: 'center',
     padding: 16,
   },
   modalCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 18,
-    padding: 22,
     width: '100%',
-    maxWidth: 400,
+    maxWidth: 440,
+    backgroundColor: '#ffffff',
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#e2e8f0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.1,
-    shadowRadius: 12,
-    elevation: 5,
+    overflow: 'hidden',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.2,
+    shadowRadius: 24,
+    elevation: 12,
   },
-  modalTitle: {
-    fontSize: 17,
-    fontWeight: '800',
-    color: '#0f172a',
-  },
-  modalSub: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 4,
-    marginBottom: 14,
-  },
-  errorBox: {
+  modalHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 14,
+    borderBottomWidth: 1,
+    borderBottomColor: '#e2e8f0',
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#fef2f2',
-    padding: 8,
+    justifyContent: 'space-between',
+  },
+  modalHeaderTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#0f172a',
+  },
+  modalCloseBtn: {
+    padding: 4,
     borderRadius: 8,
+  },
+  modalBody: {
+    padding: 20,
+  },
+  modalErrorBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    padding: 10,
+    borderRadius: 8,
+    backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fecaca',
-    marginBottom: 10,
+    marginBottom: 14,
   },
-  errorText: {
-    fontSize: 11,
-    color: '#dc2626',
-    marginLeft: 6,
+  modalErrorText: {
     flex: 1,
+    fontSize: 12,
+    color: '#dc2626',
+    fontWeight: '500',
   },
-  inputLabel: {
-    fontSize: 11,
+  photoPickerCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: '#f8fafc',
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    marginBottom: 16,
+  },
+  photoPickerTitle: {
+    fontSize: 12,
     fontWeight: '700',
+    color: '#1e293b',
+  },
+  photoPickerSub: {
+    fontSize: 11,
+    color: '#64748b',
+    marginTop: 2,
+    marginBottom: 8,
+  },
+  photoBtnsRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  choosePhotoBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+  },
+  choosePhotoBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: '#2563eb',
+  },
+  resetPhotoBtn: {
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 8,
+    backgroundColor: '#f1f5f9',
+  },
+  resetPhotoBtnText: {
+    fontSize: 11,
+    fontWeight: '600',
     color: '#475569',
-    textTransform: 'uppercase',
-    marginTop: 8,
+  },
+  nameFieldsRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+  },
+  modalFieldLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
     marginBottom: 4,
   },
-  input: {
-    backgroundColor: '#f8fafc',
-    borderRadius: 10,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    color: '#0f172a',
-    fontSize: 13,
+  modalInput: {
+    backgroundColor: '#ffffff',
     borderWidth: 1,
     borderColor: '#cbd5e1',
+    borderRadius: 8,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    fontSize: 13,
+    color: '#0f172a',
   },
-  modalActionsRow: {
+  modalFooterActions: {
     flexDirection: 'row',
-    justifyContent: 'flex-end',
     alignItems: 'center',
-    marginTop: 18,
-    gap: 10,
+    justifyContent: 'flex-end',
+    gap: 8,
+    marginTop: 20,
+    paddingTop: 14,
+    borderTopWidth: 1,
+    borderTopColor: '#f1f5f9',
   },
   modalCancelBtn: {
-    paddingHorizontal: 14,
-    paddingVertical: 8,
+    paddingHorizontal: 16,
+    paddingVertical: 9,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
+    backgroundColor: '#ffffff',
   },
   modalCancelBtnText: {
-    fontSize: 13,
-    color: '#64748b',
+    fontSize: 12,
     fontWeight: '600',
+    color: '#475569',
   },
   modalSaveBtn: {
-    backgroundColor: '#2563eb',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
     paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingVertical: 9,
+    borderRadius: 8,
+    backgroundColor: '#2563eb',
   },
   modalSaveBtnText: {
-    fontSize: 13,
+    fontSize: 12,
+    fontWeight: '600',
     color: '#ffffff',
-    fontWeight: '700',
   },
 });

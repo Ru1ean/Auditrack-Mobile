@@ -1,641 +1,630 @@
-import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams, useRouter } from 'expo-router';
 import React, { useState } from 'react';
 import {
-  ActivityIndicator,
-  Alert,
   Image,
+  KeyboardAvoidingView,
+  Platform,
   ScrollView,
+  StatusBar,
   StyleSheet,
   Text,
   TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
-import { usersAPI } from '../components/connect';
 
 const COMPANY_EMAIL_DOMAIN = '@lccbonline.edu.ph';
 
-type SelectedRole = 'personnel' | 'auditor';
-
 export default function RegisterScreen() {
   const router = useRouter();
-  const [selectedRole, setSelectedRole] = useState<SelectedRole>('personnel');
+  const params = useLocalSearchParams();
+
+  // Support both Personnel (Register.jsx) and External Auditor (RegisterAuditor.jsx)
+  const [accountType, setAccountType] = useState<'personnel' | 'auditor'>(
+    params.mode === 'auditor' ? 'auditor' : 'personnel'
+  );
 
   const [formData, setFormData] = useState({
-    firstName: '',
-    middleInitial: '',
-    lastName: '',
+    firstname: '',
+    middleinitial: '',
+    lastname: '',
     email: '',
     password: '',
-    confirmPassword: '',
   });
 
-  const [showPassword, setShowPassword] = useState(false);
-  const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [passwordError, setPasswordError] = useState('');
   const [emailError, setEmailError] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [focusedField, setFocusedField] = useState<string | null>(null);
 
-  const handleInputChange = (field: string, value: string) => {
-    setFormData((prev) => ({ ...prev, [field]: value }));
-    setError('');
-
-    if (field === 'password') {
-      validatePassword(value);
+  const validateEmail = (email: string, mode: 'personnel' | 'auditor' = accountType) => {
+    const normalizedEmail = email.trim().toLowerCase();
+    if (mode === 'auditor') {
+      const isValidFormat = /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalizedEmail);
+      if (!isValidFormat) {
+        setEmailError('Please enter a valid email address');
+        return false;
+      }
+      setEmailError('');
+      return true;
     }
-    if (field === 'email') {
-      validateEmail(value, selectedRole);
-    }
-  };
-
-  const handleRoleChange = (role: SelectedRole) => {
-    setSelectedRole(role);
-    setError('');
-    setEmailError('');
-    if (formData.email) {
-      validateEmail(formData.email, role);
-    }
-  };
-
-  const validateEmail = (email: string, role: SelectedRole) => {
-    const normalized = email.trim().toLowerCase();
-    const generalEmailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-
-    if (!generalEmailRegex.test(normalized)) {
-      setEmailError('Please enter a valid email address');
+    if (!normalizedEmail.endsWith(COMPANY_EMAIL_DOMAIN)) {
+      setEmailError(`Email must use the ${COMPANY_EMAIL_DOMAIN} domain`);
       return false;
     }
-
-    if (role === 'personnel' && !normalized.endsWith(COMPANY_EMAIL_DOMAIN)) {
-      setEmailError(`Personnel must use ${COMPANY_EMAIL_DOMAIN} email`);
-      return false;
-    }
-
     setEmailError('');
     return true;
   };
 
   const validatePassword = (password: string) => {
     const numberCount = (password.match(/\d/g) || []).length;
-
     if (password.length < 8) {
       setPasswordError('Password must be at least 8 characters long');
       return false;
     }
-
-    if (numberCount < 2) {
-      setPasswordError('Password must contain at least 2 numbers');
+    if (numberCount < 3) {
+      setPasswordError('Password must contain at least 3 numbers');
       return false;
     }
-
     setPasswordError('');
     return true;
   };
 
-  const handleRegister = async () => {
-    const { firstName, middleInitial, lastName, email, password, confirmPassword } = formData;
+  const handleChange = (name: keyof typeof formData, value: string) => {
+    setFormData((prev) => ({ ...prev, [name]: value }));
+    setError('');
+    if (name === 'password') validatePassword(value);
+    if (name === 'email') validateEmail(value, accountType);
+  };
 
-    if (!firstName.trim() || !lastName.trim() || !email.trim() || !password) {
+  const handleModeSwitch = (mode: 'personnel' | 'auditor') => {
+    setAccountType(mode);
+    setError('');
+    setEmailError('');
+    if (formData.email) {
+      validateEmail(formData.email, mode);
+    }
+  };
+
+  const handleSubmit = () => {
+    setError('');
+
+    if (!formData.firstname.trim() || !formData.lastname.trim() || !formData.email.trim() || !formData.password) {
       setError('Please fill in all required fields');
       return;
     }
 
-    if (password !== confirmPassword) {
-      setError('Passwords do not match');
-      return;
-    }
-
-    if (!validateEmail(email, selectedRole)) {
+    if (!validateEmail(formData.email, accountType)) {
       setError(
-        selectedRole === 'personnel'
-          ? `Office Personnel registration requires a ${COMPANY_EMAIL_DOMAIN} address`
+        accountType === 'personnel'
+          ? `Only ${COMPANY_EMAIL_DOMAIN} email addresses can register`
           : 'Please enter a valid email address'
       );
       return;
     }
 
-    if (!validatePassword(password)) {
-      setError('Password does not meet the security requirements');
+    if (!validatePassword(formData.password)) {
+      setError('Please fix the password errors before submitting');
       return;
     }
 
     setLoading(true);
-    setError('');
-
-    const roleId = selectedRole === 'auditor' ? 4 : 3;
-
     try {
-      // First attempt OTP flow if enabled on backend, or direct registration
-      let otpSent = false;
-      try {
-        const otpRes = await usersAPI.sendRegistrationOtp({
-          firstName: firstName.trim(),
-          middleInitial: middleInitial.trim() ? middleInitial.trim().charAt(0).toUpperCase() : '',
-          lastName: lastName.trim(),
-          email: email.trim().toLowerCase(),
-          password,
-          roleId,
-        });
-        if (otpRes?.success) {
-          otpSent = true;
-          router.push({
-            pathname: '/otp' as any,
-            params: {
-              email: email.trim().toLowerCase(),
-              roleId: String(roleId),
-              firstName: firstName.trim(),
-              lastName: lastName.trim(),
-            },
-          });
-          return;
-        }
-      } catch (otpErr) {
-        console.log('OTP send skipped or not active, trying direct register:', otpErr);
-      }
-
-      if (!otpSent) {
-        const regRes = await usersAPI.register({
-          FirstName: firstName.trim(),
-          first_name: firstName.trim(),
-          MiddleInitial: middleInitial.trim() ? middleInitial.trim().charAt(0).toUpperCase() : '',
-          middle_initial: middleInitial.trim() ? middleInitial.trim().charAt(0).toUpperCase() : '',
-          LastName: lastName.trim(),
-          last_name: lastName.trim(),
-          Email: email.trim().toLowerCase(),
-          email: email.trim().toLowerCase(),
-          Password: password,
-          password: password,
-          RoleID: roleId,
-          roleId: roleId,
-        });
-
-        if (regRes?.success) {
-          Alert.alert(
-            'Registration Submitted',
-            selectedRole === 'auditor'
-              ? 'Your External Auditor account has been created and is pending approval.'
-              : 'Your Office Personnel account has been created and is pending approval.',
-            [
-              {
-                text: 'OK',
-                onPress: () => router.replace('/login'),
-              },
-            ]
-          );
-        } else {
-          setError(regRes?.message || 'Registration failed. Please try again.');
-        }
-      }
-    } catch (err: any) {
-      console.error('Registration error:', err);
-      setError(err?.message || 'Failed to submit registration. Please check your network connection.');
+      const roleid = accountType === 'auditor' ? 4 : 2;
+      router.push({
+        pathname: '/otp' as any,
+        params: {
+          firstname: formData.firstname.trim(),
+          middleinitial: formData.middleinitial.trim(),
+          lastname: formData.lastname.trim(),
+          email: formData.email.trim().toLowerCase(),
+          password: formData.password,
+          roleid: String(roleid),
+        },
+      });
     } finally {
       setLoading(false);
     }
   };
 
+  const pwLongEnough = formData.password.length >= 8;
+  const pwHasNums = (formData.password.match(/\d/g) || []).length >= 3;
+  const isDisabled = loading || Boolean(passwordError) || Boolean(emailError);
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      <View style={styles.headerContainer}>
-        <View style={[styles.logoBadge, { marginBottom: 12 }]}>
-          <Image
-            source={require('../assets/images/logo.png')}
-            style={styles.logoImg}
-            resizeMode="contain"
-          />
-        </View>
-        <Text style={styles.appTitle}>Auditrack</Text>
-        <Text style={styles.subtitle}>Create Institutional Account</Text>
-      </View>
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.screen}
+    >
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.centerBox}>
+          {/* Header (Exact match to Web Register.jsx / RegisterAuditor.jsx) */}
+          <View style={styles.headerBlock}>
+            <View style={styles.brandRow}>
+              <Image
+                source={require('../assets/images/logo.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
+              <Text style={styles.brandName}>Auditrack</Text>
+            </View>
+            <Text style={styles.pageTitle}>
+              {accountType === 'auditor' ? 'Auditor Sign Up' : 'Create Account'}
+            </Text>
+            <Text style={styles.pageSubtitle}>
+              Fill in the details below to get started
+            </Text>
+          </View>
 
-      <View style={styles.card}>
-        {/* Role Selector Tabs */}
-        <Text style={styles.rolePickerLabel}>Select Account Role</Text>
-        <View style={styles.roleToggleRow}>
-          <TouchableOpacity
-            style={[styles.roleOption, selectedRole === 'personnel' && styles.roleOptionActive]}
-            onPress={() => handleRoleChange('personnel')}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons
-              name="badge"
-              size={20}
-              color={selectedRole === 'personnel' ? '#fff' : '#64748b'}
-            />
-            <Text
-              style={[
-                styles.roleOptionText,
-                selectedRole === 'personnel' && styles.roleOptionTextActive,
-              ]}
+          {/* Card */}
+          <View style={styles.card}>
+            {/* Subtle Account Type Switcher (Personnel vs External Auditor) */}
+            <View style={styles.modeTabs}>
+              <TouchableOpacity
+                style={[styles.modeTab, accountType === 'personnel' && styles.modeTabActive]}
+                onPress={() => handleModeSwitch('personnel')}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    accountType === 'personnel' && styles.modeTabTextActive,
+                  ]}
+                >
+                  Office Personnel
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modeTab, accountType === 'auditor' && styles.modeTabActive]}
+                onPress={() => handleModeSwitch('auditor')}
+                activeOpacity={0.85}
+              >
+                <Text
+                  style={[
+                    styles.modeTabText,
+                    accountType === 'auditor' && styles.modeTabTextActive,
+                  ]}
+                >
+                  External Auditor
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {/* Error banner */}
+            {error ? (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorBannerText}>{error}</Text>
+              </View>
+            ) : null}
+
+            {/* Auditor info banner (Matching RegisterAuditor.jsx) */}
+            {accountType === 'auditor' ? (
+              <View style={styles.infoBanner}>
+                <Text style={styles.infoBannerText}>
+                  External Auditor Invite verified: any valid email accepted.
+                </Text>
+              </View>
+            ) : null}
+
+            {/* Name row (2 columns matching Web) */}
+            <View style={styles.nameRow}>
+              <View style={styles.halfCol}>
+                <Text style={styles.label}>First Name *</Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    focusedField === 'firstname' && styles.inputFocused,
+                  ]}
+                  value={formData.firstname}
+                  onChangeText={(v) => handleChange('firstname', v)}
+                  placeholder="First name"
+                  placeholderTextColor="#94a3b8"
+                  onFocus={() => setFocusedField('firstname')}
+                  onBlur={() => setFocusedField(null)}
+                />
+              </View>
+              <View style={styles.halfCol}>
+                <Text style={styles.label}>Last Name *</Text>
+                <TextInput
+                  style={[
+                    styles.input,
+                    focusedField === 'lastname' && styles.inputFocused,
+                  ]}
+                  value={formData.lastname}
+                  onChangeText={(v) => handleChange('lastname', v)}
+                  placeholder="Last name"
+                  placeholderTextColor="#94a3b8"
+                  onFocus={() => setFocusedField('lastname')}
+                  onBlur={() => setFocusedField(null)}
+                />
+              </View>
+            </View>
+
+            {/* Middle Initial */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Middle Initial</Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  focusedField === 'middleinitial' && styles.inputFocused,
+                ]}
+                value={formData.middleinitial}
+                onChangeText={(v) => handleChange('middleinitial', v)}
+                maxLength={1}
+                placeholder="e.g. A"
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="characters"
+                onFocus={() => setFocusedField('middleinitial')}
+                onBlur={() => setFocusedField(null)}
+              />
+            </View>
+
+            {/* Email */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Email address *</Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  Boolean(emailError) && styles.inputError,
+                  focusedField === 'email' && !emailError && styles.inputFocused,
+                ]}
+                value={formData.email}
+                onChangeText={(v) => handleChange('email', v)}
+                placeholder={
+                  accountType === 'auditor'
+                    ? 'name@example.com'
+                    : `name${COMPANY_EMAIL_DOMAIN}`
+                }
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                onFocus={() => setFocusedField('email')}
+                onBlur={() => setFocusedField(null)}
+              />
+              {emailError ? (
+                <Text style={styles.fieldErrorText}>{emailError}</Text>
+              ) : (
+                <Text style={styles.fieldHelperText}>
+                  {accountType === 'auditor'
+                    ? 'Any valid email address (Gmail, Yahoo, etc.)'
+                    : `Use your ${COMPANY_EMAIL_DOMAIN} email`}
+                </Text>
+              )}
+            </View>
+
+            {/* Password */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password *</Text>
+              <View style={styles.passwordWrapper}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    Boolean(passwordError) && styles.inputError,
+                    focusedField === 'password' && !passwordError && styles.inputFocused,
+                  ]}
+                  value={formData.password}
+                  onChangeText={(v) => handleChange('password', v)}
+                  placeholder="Create a password"
+                  placeholderTextColor="#94a3b8"
+                  secureTextEntry={!showPassword}
+                  onFocus={() => setFocusedField('password')}
+                  onBlur={() => setFocusedField(null)}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword((v) => !v)}
+                  style={styles.eyeButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Feather
+                    name={showPassword ? 'eye-off' : 'eye'}
+                    size={16}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
+              </View>
+
+              {/* Password strength indicators (Matching Web Register.jsx: 8+ characters, 3+ numbers) */}
+              <View style={styles.strengthRow}>
+                {[
+                  { met: pwLongEnough, label: '8+ characters' },
+                  { met: pwHasNums, label: '3+ numbers' },
+                ].map(({ met, label }) => (
+                  <View key={label} style={styles.strengthItem}>
+                    <Feather
+                      name={met ? 'check-circle' : 'circle'}
+                      size={13}
+                      color={met ? '#16a34a' : '#94a3b8'}
+                    />
+                    <Text
+                      style={[
+                        styles.strengthLabel,
+                        { color: met ? '#16a34a' : '#94a3b8' },
+                      ]}
+                    >
+                      {label}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </View>
+
+            {/* Submit Button (Green gradient matching Web Register.jsx) */}
+            <TouchableOpacity
+              onPress={handleSubmit}
+              disabled={isDisabled}
+              activeOpacity={0.88}
+              style={styles.submitTouch}
             >
-              Personnel
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.roleOption, selectedRole === 'auditor' && styles.roleOptionActive]}
-            onPress={() => handleRoleChange('auditor')}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons
-              name="verified-user"
-              size={20}
-              color={selectedRole === 'auditor' ? '#fff' : '#64748b'}
-            />
-            <Text
-              style={[
-                styles.roleOptionText,
-                selectedRole === 'auditor' && styles.roleOptionTextActive,
-              ]}
-            >
-              Ext. Auditor
-            </Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Role Description Badge */}
-        <View style={styles.roleInfoBadge}>
-          <MaterialIcons
-            name="info-outline"
-            size={16}
-            color={selectedRole === 'auditor' ? '#0284c7' : '#059669'}
-          />
-          <Text style={styles.roleInfoText}>
-            {selectedRole === 'auditor'
-              ? 'External Auditor: Review accreditation standards, inspect evidence, and grade compliance.'
-              : 'Office Personnel: Manage office compliance checklists, upload evidence, and track task progress.'}
-          </Text>
-        </View>
-
-        {error ? (
-          <View style={styles.errorBox}>
-            <MaterialIcons name="error-outline" size={18} color="#b91c1c" />
-            <Text style={styles.errorText}>{error}</Text>
+              {isDisabled ? (
+                <View style={[styles.submitBtn, styles.submitBtnDisabled]}>
+                  <Text style={styles.submitBtnText}>
+                    {loading ? 'Creating Account…' : 'Create Account'}
+                  </Text>
+                </View>
+              ) : (
+                <LinearGradient
+                  colors={['#16a34a', '#15803d']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.submitBtn}
+                >
+                  <Text style={styles.submitBtnText}>
+                    {loading ? 'Creating Account…' : 'Create Account'}
+                  </Text>
+                </LinearGradient>
+              )}
+            </TouchableOpacity>
           </View>
-        ) : null}
 
-        {/* Name Fields */}
-        <View style={styles.nameRow}>
-          <View style={{ flex: 2, marginRight: 8 }}>
-            <Text style={styles.label}>First Name *</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Maria"
-              value={formData.firstName}
-              onChangeText={(val) => handleInputChange('firstName', val)}
-              placeholderTextColor="#94a3b8"
-              editable={!loading}
-            />
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.label}>M.I.</Text>
-            <TextInput
-              style={styles.input}
-              placeholder="A"
-              maxLength={2}
-              value={formData.middleInitial}
-              onChangeText={(val) => handleInputChange('middleInitial', val)}
-              placeholderTextColor="#94a3b8"
-              editable={!loading}
-              autoCapitalize="characters"
-            />
+          {/* Sign in link */}
+          <View style={styles.footerRow}>
+            <Text style={styles.footerPrompt}>Already have an account? </Text>
+            <TouchableOpacity onPress={() => router.replace('/login')}>
+              <Text style={styles.footerLink}>Sign in</Text>
+            </TouchableOpacity>
           </View>
         </View>
-
-        <Text style={styles.label}>Last Name *</Text>
-        <TextInput
-          style={styles.input}
-          placeholder="e.g. Santos"
-          value={formData.lastName}
-          onChangeText={(val) => handleInputChange('lastName', val)}
-          placeholderTextColor="#94a3b8"
-          editable={!loading}
-        />
-
-        {/* Email Field */}
-        <Text style={styles.label}>
-          {selectedRole === 'personnel'
-            ? `Institutional Email (${COMPANY_EMAIL_DOMAIN}) *`
-            : 'Email Address *'}
-        </Text>
-        <TextInput
-          style={[styles.input, Boolean(emailError) && styles.inputError]}
-          placeholder={
-            selectedRole === 'personnel'
-              ? `username${COMPANY_EMAIL_DOMAIN}`
-              : 'auditor@organization.org'
-          }
-          value={formData.email}
-          onChangeText={(val) => handleInputChange('email', val)}
-          autoCapitalize="none"
-          keyboardType="email-address"
-          placeholderTextColor="#94a3b8"
-          editable={!loading}
-        />
-        {emailError ? <Text style={styles.fieldErrorText}>{emailError}</Text> : null}
-
-        {/* Password */}
-        <Text style={styles.label}>Password *</Text>
-        <View style={styles.passwordContainer}>
-          <TextInput
-            style={styles.passwordInput}
-            placeholder="Min. 8 characters, 2 numbers"
-            value={formData.password}
-            onChangeText={(val) => handleInputChange('password', val)}
-            secureTextEntry={!showPassword}
-            placeholderTextColor="#94a3b8"
-            editable={!loading}
-          />
-          <TouchableOpacity
-            style={styles.eyeBtn}
-            onPress={() => setShowPassword(!showPassword)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <MaterialIcons
-              name={showPassword ? 'visibility' : 'visibility-off'}
-              size={20}
-              color="#64748b"
-            />
-          </TouchableOpacity>
-        </View>
-        {passwordError ? <Text style={styles.fieldErrorText}>{passwordError}</Text> : null}
-
-        {/* Confirm Password */}
-        <Text style={styles.label}>Confirm Password *</Text>
-        <View style={styles.passwordContainer}>
-          <TextInput
-            style={styles.passwordInput}
-            placeholder="Re-enter your password"
-            value={formData.confirmPassword}
-            onChangeText={(val) => handleInputChange('confirmPassword', val)}
-            secureTextEntry={!showConfirmPassword}
-            placeholderTextColor="#94a3b8"
-            editable={!loading}
-          />
-          <TouchableOpacity
-            style={styles.eyeBtn}
-            onPress={() => setShowConfirmPassword(!showConfirmPassword)}
-            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          >
-            <MaterialIcons
-              name={showConfirmPassword ? 'visibility' : 'visibility-off'}
-              size={20}
-              color="#64748b"
-            />
-          </TouchableOpacity>
-        </View>
-
-        {/* Submit Button */}
-        <TouchableOpacity
-          style={[styles.submitButton, loading && styles.submitButtonDisabled]}
-          onPress={handleRegister}
-          disabled={loading}
-          activeOpacity={0.8}
-        >
-          {loading ? (
-            <ActivityIndicator color="#fff" size="small" />
-          ) : (
-            <Text style={styles.submitButtonText}>
-              {selectedRole === 'auditor'
-                ? 'Create Auditor Account'
-                : 'Create Personnel Account'}
-            </Text>
-          )}
-        </TouchableOpacity>
-
-        {/* Back to Login */}
-        <View style={styles.loginRedirectRow}>
-          <Text style={styles.alreadyText}>Already have an account? </Text>
-          <TouchableOpacity onPress={() => router.replace('/login')}>
-            <Text style={styles.loginLink}>Sign In</Text>
-          </TouchableOpacity>
-        </View>
-      </View>
-    </ScrollView>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: '#090e1a',
+    backgroundColor: '#ffffff',
   },
-  contentContainer: {
+  scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    padding: 20,
-    paddingTop: 30,
-    paddingBottom: 40,
-  },
-  headerContainer: {
     alignItems: 'center',
-    marginBottom: 24,
+    paddingHorizontal: 24,
+    paddingVertical: 24,
+    backgroundColor: '#ffffff',
   },
-  logosRow: {
+  centerBox: {
+    width: '100%',
+    maxWidth: 420,
+    paddingBottom: 16,
+  },
+  headerBlock: {
+    alignItems: 'center',
+    marginBottom: 22,
+  },
+  brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
+    justifyContent: 'center',
+    gap: 10,
     marginBottom: 12,
   },
-  logoBadge: {
-    width: 54,
-    height: 54,
-    borderRadius: 16,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
-    justifyContent: 'center',
-    padding: 5,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
-    shadowRadius: 8,
-    elevation: 6,
+  brandLogo: {
+    width: 44,
+    height: 44,
   },
-  logoImg: {
-    width: 42,
-    height: 42,
-  },
-  logoDivider: {
-    width: 1,
-    height: 30,
-    backgroundColor: 'rgba(255, 255, 255, 0.3)',
-  },
-  appTitle: {
+  brandName: {
     fontSize: 26,
-    fontWeight: '800',
-    color: '#ffffff',
-    letterSpacing: 0.5,
+    fontWeight: '700',
+    color: '#0f172a',
+    letterSpacing: -0.5,
   },
-  subtitle: {
-    fontSize: 14,
-    color: '#94a3b8',
-    marginTop: 2,
+  pageTitle: {
+    fontSize: 22,
+    fontWeight: '700',
+    color: '#0f172a',
+    letterSpacing: -0.4,
+    marginBottom: 4,
+  },
+  pageSubtitle: {
+    fontSize: 13,
+    color: '#64748b',
   },
   card: {
-    backgroundColor: '#0f172a',
-    borderRadius: 18,
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#1e293b',
-    padding: 20,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.3,
-    shadowRadius: 16,
-    elevation: 6,
+    borderColor: '#e2e8f0',
+    padding: 24,
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
+    elevation: 4,
+    gap: 14,
   },
-  rolePickerLabel: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#cbd5e1',
-    marginBottom: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  roleToggleRow: {
+  modeTabs: {
     flexDirection: 'row',
-    backgroundColor: '#1e293b',
-    borderRadius: 12,
-    padding: 4,
-    marginBottom: 14,
-  },
-  roleOption: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    paddingVertical: 10,
-    borderRadius: 9,
-  },
-  roleOptionActive: {
-    backgroundColor: '#0284c7',
-  },
-  roleOptionText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: '#94a3b8',
-  },
-  roleOptionTextActive: {
-    color: '#ffffff',
-  },
-  roleInfoBadge: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: 8,
-    backgroundColor: 'rgba(2, 132, 199, 0.08)',
-    borderWidth: 1,
-    borderColor: 'rgba(2, 132, 199, 0.2)',
+    backgroundColor: '#f1f5f9',
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 16,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: '#e2e8f0',
   },
-  roleInfoText: {
+  modeTab: {
     flex: 1,
+    paddingVertical: 7,
+    alignItems: 'center',
+    borderRadius: 8,
+  },
+  modeTabActive: {
+    backgroundColor: '#ffffff',
+    shadowColor: '#0f172a',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 1,
+  },
+  modeTabText: {
     fontSize: 12,
-    color: '#94a3b8',
-    lineHeight: 16,
+    fontWeight: '600',
+    color: '#64748b',
+  },
+  modeTabTextActive: {
+    color: '#0f172a',
+    fontWeight: '700',
+  },
+  errorBanner: {
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    backgroundColor: '#fef2f2',
+    borderWidth: 1,
+    borderColor: '#fecaca',
+    borderRadius: 10,
+  },
+  errorBannerText: {
+    fontSize: 12.5,
+    color: '#b91c1c',
+  },
+  infoBanner: {
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    backgroundColor: '#eff6ff',
+    borderWidth: 1,
+    borderColor: '#bfdbfe',
+    borderRadius: 10,
+  },
+  infoBannerText: {
+    fontSize: 12,
+    color: '#1d4ed8',
   },
   nameRow: {
     flexDirection: 'row',
+    gap: 12,
+  },
+  halfCol: {
+    flex: 1,
+    gap: 5,
+  },
+  fieldGroup: {
+    gap: 5,
   },
   label: {
-    fontSize: 13,
+    fontSize: 12.5,
     fontWeight: '600',
-    color: '#e2e8f0',
-    marginBottom: 6,
-    marginTop: 10,
+    color: '#374151',
   },
   input: {
-    backgroundColor: '#1e293b',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 10,
+    width: '100%',
+    paddingVertical: 10,
     paddingHorizontal: 14,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: '#f8fafc',
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    fontSize: 13.5,
+    backgroundColor: '#f8fafc',
+    color: '#0f172a',
+  },
+  inputFocused: {
+    borderColor: '#2563eb',
+    backgroundColor: '#ffffff',
   },
   inputError: {
-    borderColor: '#ef4444',
-  },
-  passwordContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#1e293b',
-    borderWidth: 1,
-    borderColor: '#334155',
-    borderRadius: 10,
-  },
-  passwordInput: {
-    flex: 1,
-    paddingHorizontal: 14,
-    paddingVertical: 11,
-    fontSize: 15,
-    color: '#f8fafc',
-  },
-  eyeBtn: {
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: '#fca5a5',
   },
   fieldErrorText: {
-    fontSize: 11,
-    color: '#f87171',
-    marginTop: 4,
-    marginLeft: 2,
+    marginTop: 3,
+    fontSize: 11.5,
+    color: '#dc2626',
   },
-  errorBox: {
+  fieldHelperText: {
+    marginTop: 3,
+    fontSize: 11.5,
+    color: '#94a3b8',
+  },
+  passwordWrapper: {
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  passwordInput: {
+    paddingRight: 40,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    padding: 4,
+  },
+  strengthRow: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 6,
+  },
+  strengthItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    backgroundColor: 'rgba(239, 68, 68, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(239, 68, 68, 0.3)',
+    gap: 5,
+  },
+  strengthLabel: {
+    fontSize: 11.5,
+  },
+  submitTouch: {
+    marginTop: 4,
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 12,
   },
-  errorText: {
-    flex: 1,
-    color: '#fca5a5',
-    fontSize: 13,
-  },
-  submitButton: {
-    backgroundColor: '#0284c7',
-    borderRadius: 12,
-    paddingVertical: 14,
+  submitBtn: {
+    width: '100%',
+    paddingVertical: 12,
+    borderRadius: 10,
     alignItems: 'center',
     justifyContent: 'center',
-    marginTop: 22,
-    shadowColor: '#0284c7',
+    shadowColor: '#16a34a',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.3,
-    shadowRadius: 8,
-    elevation: 4,
+    shadowRadius: 12,
+    elevation: 3,
   },
-  submitButtonDisabled: {
-    opacity: 0.6,
+  submitBtnDisabled: {
+    backgroundColor: '#94a3b8',
+    shadowOpacity: 0,
+    elevation: 0,
   },
-  submitButtonText: {
+  submitBtnText: {
     color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-    letterSpacing: 0.3,
+    fontSize: 14.5,
+    fontWeight: '600',
   },
-  loginRedirectRow: {
+  footerRow: {
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
     marginTop: 18,
   },
-  alreadyText: {
+  footerPrompt: {
     fontSize: 13,
-    color: '#94a3b8',
+    color: '#64748b',
   },
-  loginLink: {
+  footerLink: {
     fontSize: 13,
-    fontWeight: '700',
-    color: '#38bdf8',
+    fontWeight: '600',
+    color: '#2563eb',
   },
 });

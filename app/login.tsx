@@ -1,8 +1,9 @@
-import { MaterialIcons } from '@expo/vector-icons';
-import { useRouter } from 'expo-router';
-import React, { useState } from 'react';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import { Feather } from '@expo/vector-icons';
+import { LinearGradient } from 'expo-linear-gradient';
+import { useLocalSearchParams, useRouter } from 'expo-router';
+import React, { useEffect, useState } from 'react';
 import {
-  ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
@@ -15,17 +16,123 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
-import { connect, setToken, storeUser, usersAPI } from '../components/connect';
+import { connect, getStoredUser, getToken, setToken, storeUser, usersAPI } from '../components/connect';
 
 export default function LoginScreen() {
+  const router = useRouter();
+  const params = useLocalSearchParams();
+
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const router = useRouter();
+  const [successMessage, setSuccessMessage] = useState('');
+  const [emailFocused, setEmailFocused] = useState(false);
+  const [passwordFocused, setPasswordFocused] = useState(false);
+
+  const [blockedMs, setBlockedMs] = useState(0);
+  const [blockedUntil, setBlockedUntil] = useState<number | null>(null);
+
+  // Redirect if already logged in (matching Web Login.jsx)
+  useEffect(() => {
+    let active = true;
+    const checkSession = async () => {
+      try {
+        const token = await getToken();
+        const user = await getStoredUser();
+        if (active && token && user) {
+          router.replace('/(tabs)/profile');
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void checkSession();
+    return () => {
+      active = false;
+    };
+  }, [router]);
+
+  // Show message from OTP verification if passed
+  useEffect(() => {
+    if (params.message && typeof params.message === 'string') {
+      setSuccessMessage(params.message);
+    }
+  }, [params.message]);
+
+  // Restore blocked state on mount (matching Web Login.jsx)
+  useEffect(() => {
+    const restoreBlocked = async () => {
+      try {
+        const stored =
+          Platform.OS === 'web'
+            ? localStorage.getItem('loginBlockedUntil')
+            : await AsyncStorage.getItem('loginBlockedUntil');
+        if (stored) {
+          const until = Number(stored);
+          if (!Number.isNaN(until) && until > Date.now()) {
+            setBlockedUntil(until);
+            setBlockedMs(Math.max(0, until - Date.now()));
+          } else {
+            if (Platform.OS === 'web') localStorage.removeItem('loginBlockedUntil');
+            else await AsyncStorage.removeItem('loginBlockedUntil');
+          }
+        }
+      } catch {
+        // ignore
+      }
+    };
+    void restoreBlocked();
+  }, []);
+
+  // Server-side pre-check when email changes (matching Web Login.jsx)
+  useEffect(() => {
+    const timer = setTimeout(async () => {
+      try {
+        const trimmed = email.trim();
+        if (!trimmed) {
+          setBlockedMs(0);
+          setBlockedUntil(null);
+          return;
+        }
+        const resp = await usersAPI.loginStatus(trimmed);
+        const remaining = resp?.remainingMs || 0;
+        if (remaining > 0) {
+          const until = Date.now() + remaining;
+          setBlockedMs(remaining);
+          setBlockedUntil(until);
+          setError(resp?.message || 'Too many failed login attempts. Please wait.');
+        } else {
+          setBlockedMs(0);
+          setBlockedUntil(null);
+        }
+      } catch {
+        // ignore network errors during precheck
+      }
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [email]);
+
+  // Countdown for blocked state
+  useEffect(() => {
+    if (!blockedUntil) return;
+    const tick = () => {
+      const ms = Math.max(0, blockedUntil - Date.now());
+      setBlockedMs(ms);
+      if (ms <= 0) {
+        setBlockedUntil(null);
+        setBlockedMs(0);
+        setError('');
+      }
+    };
+    tick();
+    const id = setInterval(tick, 1000);
+    return () => clearInterval(id);
+  }, [blockedUntil]);
 
   const handleLogin = async () => {
+    if (blockedMs > 0) return;
     if (!email.trim() || !password) {
       setError('Please fill in both email and password.');
       return;
@@ -36,16 +143,13 @@ export default function LoginScreen() {
 
     try {
       const response = await connect.post('/user/login', {
-        email: email.trim().toLowerCase(),
+        email: email.trim(),
         password,
       });
-
-      console.log('LOGIN RESPONSE:', response);
 
       if (response.success && response.token) {
         await setToken(response.token);
 
-        // Fetch current user details or use returned user object
         let loggedInUser = response.user;
         if (!loggedInUser) {
           try {
@@ -53,8 +157,8 @@ export default function LoginScreen() {
             if (meRes?.success && meRes?.user) {
               loggedInUser = meRes.user;
             }
-          } catch (meErr) {
-            console.warn('Failed to fetch /user/me on login:', meErr);
+          } catch {
+            // ignore
           }
         }
 
@@ -62,178 +166,188 @@ export default function LoginScreen() {
           await storeUser(loggedInUser);
         }
 
-        // Navigate to the primary requirements & standards workspace
-        router.replace('/(tabs)/requirements');
+        try {
+          if (Platform.OS === 'web') localStorage.removeItem('loginBlockedUntil');
+          else await AsyncStorage.removeItem('loginBlockedUntil');
+        } catch {}
+
+        router.replace('/(tabs)/profile');
       } else {
-        if (response.approvalStatus === 'pending') {
-          setError('Your account registration is pending approval by the administrator.');
-          Alert.alert('Account Pending', 'Your account has been submitted and is currently pending approval.');
-        } else if (response.approvalStatus === 'denied') {
-          setError('Your account access has been denied by the administrator.');
-          Alert.alert('Access Denied', 'Your account was not approved. Please contact institutional support.');
+        const status = response.approvalstatus || response.approvalStatus;
+        if (status === 'pending') {
+          setError('Your account is pending approval. Please wait for admin approval.');
+          Alert.alert(
+            'Account Pending',
+            'Your account is still pending approval. Please wait for the administrator to review your account.'
+          );
+        } else if (status === 'denied') {
+          setError('Your account has been denied access.');
+          Alert.alert(
+            'Access Denied',
+            'Your account has been denied access. Please contact the administrator for more information.'
+          );
         } else {
-          setError(response.message || 'Login failed. Please verify your credentials.');
+          setError(response.message || 'Login failed');
         }
       }
     } catch (err: any) {
-      console.log('LOGIN ERROR:', err);
-      setError(err?.message || 'Invalid email or password.');
+      setError(err?.message || 'Invalid email or password');
     } finally {
       setLoading(false);
     }
   };
 
-  const handleRegister = () => {
-    router.push('/register');
-  };
-
   return (
     <KeyboardAvoidingView
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
+      style={styles.screen}
     >
-      <StatusBar barStyle="dark-content" backgroundColor="#f8fafc" />
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" />
       <ScrollView
         contentContainerStyle={styles.scrollContent}
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
-        {/* Top Header Branding */}
-        <View style={styles.headerContainer}>
-          <View style={[styles.logoCard, { marginBottom: 12 }]}>
-            <Image
-              source={require('../assets/images/logo.png')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
-          </View>
-
-          <Text style={styles.appTitle}>Auditrack</Text>
-          <Text style={styles.appSubtitle}>Compliance Audit Management System</Text>
-          <Text style={styles.institutionText}>La Consolacion College Bacolod</Text>
-
-          {/* Quick Feature Pills */}
-          <View style={styles.featurePillsRow}>
-            <View style={styles.featurePill}>
-              <MaterialIcons name="verified-user" size={12} color="#2563eb" />
-              <Text style={styles.featurePillText}>Audit Management</Text>
+        <View style={styles.centerBox}>
+          {/* Header (Exact match to Web Login.jsx) */}
+          <View style={styles.headerBlock}>
+            <View style={styles.brandRow}>
+              <Image
+                source={require('../assets/images/logo.png')}
+                style={styles.brandLogo}
+                resizeMode="contain"
+              />
+              <Text style={styles.brandName}>Auditrack</Text>
             </View>
-            <View style={styles.featurePill}>
-              <MaterialIcons name="assignment" size={12} color="#2563eb" />
-              <Text style={styles.featurePillText}>Standards Tracking</Text>
-            </View>
-          </View>
-        </View>
-
-        {/* Form Card (Matching Web Right Login Card) */}
-        <View style={styles.formCard}>
-          <View style={styles.cardHeader}>
             <Text style={styles.welcomeTitle}>Welcome back</Text>
             <Text style={styles.welcomeSubtitle}>Sign in to your account to continue</Text>
-
-            {/* Role Tags */}
-            <View style={styles.roleTagRow}>
-              <View style={styles.roleTag}>
-                <MaterialIcons name="rate-review" size={12} color="#1d4ed8" />
-                <Text style={styles.roleTagText}>External Auditor</Text>
-              </View>
-              <View style={[styles.roleTag, styles.roleTagGreen]}>
-                <MaterialIcons name="badge" size={12} color="#059669" />
-                <Text style={styles.roleTagTextGreen}>Office Personnel</Text>
-              </View>
-            </View>
           </View>
 
-          {error ? (
-            <View style={styles.errorBox}>
-              <MaterialIcons name="error-outline" size={18} color="#dc2626" />
-              <Text style={styles.errorText}>{error}</Text>
-            </View>
-          ) : null}
+          {/* Card (Exact match to Web Login.jsx) */}
+          <View style={styles.card}>
+            {/* Success message */}
+            {successMessage && !error ? (
+              <View style={styles.successBanner}>
+                <Feather name="check-circle" size={15} color="#15803d" />
+                <Text style={styles.successBannerText}>{successMessage}</Text>
+              </View>
+            ) : null}
 
-          <Text style={styles.label}>Email Address</Text>
-          <View style={styles.inputContainer}>
-            <MaterialIcons name="mail-outline" size={19} color="#64748b" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your institutional email"
-              value={email}
-              onChangeText={(val) => {
-                setEmail(val);
-                setError('');
-              }}
-              autoCapitalize="none"
-              keyboardType="email-address"
-              editable={!loading}
-              placeholderTextColor="#94a3b8"
-            />
-          </View>
+            {/* Block / Error banners */}
+            {blockedMs > 0 ? (
+              <View style={styles.blockedBanner}>
+                <Text style={styles.blockedBannerText}>
+                  {(() => {
+                    const total = Math.ceil(blockedMs / 1000);
+                    const m = Math.floor(total / 60);
+                    const s = total % 60;
+                    return `Too many failed attempts. Please wait ${m}:${String(s).padStart(2, '0')} before retrying.`;
+                  })()}
+                </Text>
+              </View>
+            ) : error ? (
+              <View style={styles.errorBanner}>
+                <Text style={styles.errorBannerText}>{error}</Text>
+              </View>
+            ) : null}
 
-          <Text style={styles.label}>Password</Text>
-          <View style={styles.inputContainer}>
-            <MaterialIcons name="lock-outline" size={19} color="#64748b" style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your password"
-              value={password}
-              onChangeText={(val) => {
-                setPassword(val);
-                setError('');
-              }}
-              secureTextEntry={!showPassword}
-              editable={!loading}
-              placeholderTextColor="#94a3b8"
-            />
-            <TouchableOpacity
-              onPress={() => setShowPassword(!showPassword)}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              style={styles.eyeBtn}
-            >
-              <MaterialIcons
-                name={showPassword ? 'visibility' : 'visibility-off'}
-                size={19}
-                color="#64748b"
+            {/* Email field */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Email address</Text>
+              <TextInput
+                style={[
+                  styles.input,
+                  emailFocused && styles.inputFocused,
+                  blockedMs > 0 && styles.inputDisabled,
+                ]}
+                value={email}
+                onChangeText={(val) => {
+                  setEmail(val);
+                  setError('');
+                }}
+                placeholder="you@lccbonline.edu.ph"
+                placeholderTextColor="#94a3b8"
+                autoCapitalize="none"
+                keyboardType="email-address"
+                editable={!loading && blockedMs <= 0}
+                onFocus={() => setEmailFocused(true)}
+                onBlur={() => setEmailFocused(false)}
               />
+            </View>
+
+            {/* Password field */}
+            <View style={styles.fieldGroup}>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.passwordWrapper}>
+                <TextInput
+                  style={[
+                    styles.input,
+                    styles.passwordInput,
+                    passwordFocused && styles.inputFocused,
+                    blockedMs > 0 && styles.inputDisabled,
+                  ]}
+                  value={password}
+                  onChangeText={(val) => {
+                    setPassword(val);
+                    setError('');
+                  }}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#94a3b8"
+                  secureTextEntry={!showPassword}
+                  editable={!loading && blockedMs <= 0}
+                  onFocus={() => setPasswordFocused(true)}
+                  onBlur={() => setPasswordFocused(false)}
+                />
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                  disabled={blockedMs > 0}
+                  style={styles.eyeButton}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Feather
+                    name={showPassword ? 'eye-off' : 'eye'}
+                    size={18}
+                    color="#94a3b8"
+                  />
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Submit button */}
+            <TouchableOpacity
+              onPress={handleLogin}
+              disabled={loading || blockedMs > 0}
+              activeOpacity={0.88}
+              style={styles.submitTouch}
+            >
+              {loading || blockedMs > 0 ? (
+                <View style={[styles.submitBtn, styles.submitBtnDisabled]}>
+                  <Text style={styles.submitBtnText}>
+                    {loading
+                      ? 'Signing in…'
+                      : `Locked (${Math.ceil(blockedMs / 1000)}s)`}
+                  </Text>
+                </View>
+              ) : (
+                <LinearGradient
+                  colors={['#2563eb', '#1d4ed8']}
+                  start={{ x: 0, y: 0 }}
+                  end={{ x: 1, y: 1 }}
+                  style={styles.submitBtn}
+                >
+                  <Text style={styles.submitBtnText}>Sign in</Text>
+                </LinearGradient>
+              )}
             </TouchableOpacity>
           </View>
 
-          <TouchableOpacity
-            style={[styles.button, loading && styles.buttonDisabled]}
-            onPress={handleLogin}
-            disabled={loading}
-            activeOpacity={0.85}
-          >
-            {loading ? (
-              <ActivityIndicator color="#fff" size="small" />
-            ) : (
-              <View style={styles.buttonContent}>
-                <Text style={styles.buttonText}>Sign In</Text>
-                <MaterialIcons name="arrow-forward" size={18} color="#ffffff" />
-              </View>
-            )}
-          </TouchableOpacity>
-
-          <View style={styles.divider}>
-            <View style={styles.line} />
-            <Text style={styles.dividerText}>OR</Text>
-            <View style={styles.line} />
+          {/* Sign up link */}
+          <View style={styles.footerRow}>
+            <Text style={styles.footerPrompt}>Don&apos;t have an account? </Text>
+            <TouchableOpacity onPress={() => router.push('/register')}>
+              <Text style={styles.footerLink}>Sign up</Text>
+            </TouchableOpacity>
           </View>
-
-          <TouchableOpacity
-            style={styles.registerButton}
-            onPress={handleRegister}
-            disabled={loading}
-            activeOpacity={0.8}
-          >
-            <MaterialIcons name="person-add-alt" size={18} color="#1d4ed8" style={{ marginRight: 6 }} />
-            <Text style={styles.registerButtonText}>Create New Account</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Footer */}
-        <View style={styles.footerContainer}>
-          <Text style={styles.footerText}>Auditrack Compliance Management System</Text>
-          <Text style={styles.footerSubText}>La Consolacion College Bacolod • Automated Portal</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -241,264 +355,184 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: {
+  screen: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: '#ffffff',
   },
   scrollContent: {
     flexGrow: 1,
     justifyContent: 'center',
-    paddingHorizontal: 20,
-    paddingTop: Platform.OS === 'ios' ? 44 : 32,
-    paddingBottom: 36,
-  },
-  headerContainer: {
     alignItems: 'center',
-    marginBottom: 20,
+    paddingHorizontal: 24,
+    paddingVertical: 32,
+    backgroundColor: '#ffffff',
   },
-  logosRow: {
+  centerBox: {
+    width: '100%',
+    maxWidth: 420,
+  },
+  headerBlock: {
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+  brandRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 12,
-    marginBottom: 12,
-  },
-  logoCard: {
-    width: 62,
-    height: 62,
-    borderRadius: 18,
-    backgroundColor: '#ffffff',
-    alignItems: 'center',
     justifyContent: 'center',
-    padding: 6,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    shadowColor: '#2563eb',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.12,
-    shadowRadius: 10,
-    elevation: 4,
+    gap: 10,
+    marginBottom: 14,
   },
-  logoImage: {
+  brandLogo: {
     width: 48,
     height: 48,
   },
-  logoDivider: {
-    width: 1.5,
-    height: 32,
-    backgroundColor: '#cbd5e1',
-  },
-  appTitle: {
-    fontSize: 27,
-    fontWeight: '800',
-    color: '#0f172a',
-    letterSpacing: -0.4,
-  },
-  appSubtitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: '#64748b',
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  institutionText: {
-    fontSize: 11,
+  brandName: {
+    fontSize: 28,
     fontWeight: '700',
-    color: '#1d4ed8',
-    marginTop: 4,
-    letterSpacing: 0.3,
-  },
-  featurePillsRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-  },
-  featurePill: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#dbeafe',
-    borderRadius: 16,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-  },
-  featurePillText: {
-    fontSize: 10,
-    fontWeight: '600',
-    color: '#1e40af',
-  },
-  formCard: {
-    backgroundColor: '#ffffff',
-    borderRadius: 22,
-    borderWidth: 1,
-    borderColor: '#e2e8f0',
-    padding: 22,
-    shadowColor: '#0f172a',
-    shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.08,
-    shadowRadius: 18,
-    elevation: 4,
-  },
-  cardHeader: {
-    alignItems: 'center',
-    marginBottom: 16,
+    color: '#0f172a',
+    letterSpacing: -0.5,
   },
   welcomeTitle: {
-    fontSize: 22,
-    fontWeight: '800',
+    fontSize: 23,
+    fontWeight: '700',
     color: '#0f172a',
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
+    marginBottom: 4,
   },
   welcomeSubtitle: {
-    fontSize: 13,
+    fontSize: 14,
     color: '#64748b',
-    marginTop: 3,
   },
-  roleTagRow: {
-    flexDirection: 'row',
-    gap: 8,
-    marginTop: 10,
-  },
-  roleTag: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    paddingHorizontal: 9,
-    paddingVertical: 3,
-    borderRadius: 12,
-    backgroundColor: '#eff6ff',
+  card: {
+    backgroundColor: '#ffffff',
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: '#bfdbfe',
-  },
-  roleTagText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#1d4ed8',
-  },
-  roleTagGreen: {
-    backgroundColor: '#ecfdf5',
-    borderColor: '#a7f3d0',
-  },
-  roleTagTextGreen: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#059669',
-  },
-  label: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#475569',
-    marginBottom: 6,
-    marginTop: 12,
-    textTransform: 'uppercase',
-    letterSpacing: 0.6,
-  },
-  inputContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-  },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
-    flex: 1,
-    paddingVertical: 12,
-    fontSize: 14,
-    color: '#0f172a',
-  },
-  eyeBtn: {
-    padding: 6,
-  },
-  button: {
-    backgroundColor: '#1d4ed8',
-    borderRadius: 12,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 20,
-    shadowColor: '#1d4ed8',
+    borderColor: '#e2e8f0',
+    padding: 28,
+    shadowColor: '#0f172a',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.28,
-    shadowRadius: 8,
+    shadowOpacity: 0.08,
+    shadowRadius: 24,
     elevation: 4,
+    gap: 16,
   },
-  buttonDisabled: {
-    opacity: 0.6,
-  },
-  buttonContent: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  buttonText: {
-    color: '#ffffff',
-    fontSize: 15,
-    fontWeight: '700',
-  },
-  divider: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginVertical: 18,
-  },
-  line: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#e2e8f0',
-  },
-  dividerText: {
-    marginHorizontal: 10,
-    color: '#94a3b8',
-    fontSize: 11,
-    fontWeight: '700',
-  },
-  registerButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#bfdbfe',
-    backgroundColor: '#eff6ff',
-    borderRadius: 12,
-    paddingVertical: 12,
-  },
-  registerButtonText: {
-    color: '#1d4ed8',
-    fontSize: 14,
-    fontWeight: '700',
-  },
-  errorBox: {
+  successBanner: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 8,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#f0fdf4',
+    borderWidth: 1,
+    borderColor: '#bbf7d0',
+    borderRadius: 10,
+  },
+  successBannerText: {
+    flex: 1,
+    fontSize: 13,
+    color: '#15803d',
+  },
+  blockedBanner: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    backgroundColor: '#fffbeb',
+    borderWidth: 1,
+    borderColor: '#fde68a',
+    borderRadius: 10,
+  },
+  blockedBannerText: {
+    fontSize: 13,
+    color: '#92400e',
+  },
+  errorBanner: {
+    paddingVertical: 12,
+    paddingHorizontal: 14,
     backgroundColor: '#fef2f2',
     borderWidth: 1,
     borderColor: '#fecaca',
     borderRadius: 10,
-    padding: 10,
-    marginBottom: 8,
   },
-  errorText: {
-    flex: 1,
-    color: '#dc2626',
+  errorBannerText: {
     fontSize: 13,
+    color: '#b91c1c',
   },
-  footerContainer: {
-    marginTop: 22,
-    alignItems: 'center',
+  fieldGroup: {
+    gap: 6,
   },
-  footerText: {
-    fontSize: 11,
+  label: {
+    fontSize: 13,
     fontWeight: '600',
+    color: '#374151',
+  },
+  input: {
+    width: '100%',
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+    borderWidth: 1.5,
+    borderColor: '#e2e8f0',
+    borderRadius: 10,
+    fontSize: 14,
+    backgroundColor: '#f8fafc',
+    color: '#0f172a',
+  },
+  inputFocused: {
+    borderColor: '#2563eb',
+    backgroundColor: '#ffffff',
+  },
+  inputDisabled: {
+    opacity: 0.6,
+  },
+  passwordWrapper: {
+    position: 'relative',
+    justifyContent: 'center',
+  },
+  passwordInput: {
+    paddingRight: 44,
+  },
+  eyeButton: {
+    position: 'absolute',
+    right: 12,
+    padding: 4,
+  },
+  submitTouch: {
+    marginTop: 4,
+    borderRadius: 10,
+  },
+  submitBtn: {
+    width: '100%',
+    paddingVertical: 13,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#2563eb',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 3,
+  },
+  submitBtnDisabled: {
+    backgroundColor: '#94a3b8',
+    shadowOpacity: 0,
+    elevation: 0,
+  },
+  submitBtnText: {
+    color: '#ffffff',
+    fontSize: 14.5,
+    fontWeight: '600',
+  },
+  footerRow: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  footerPrompt: {
+    fontSize: 13,
     color: '#64748b',
   },
-  footerSubText: {
-    fontSize: 10,
-    color: '#94a3b8',
-    marginTop: 2,
+  footerLink: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: '#2563eb',
   },
 });

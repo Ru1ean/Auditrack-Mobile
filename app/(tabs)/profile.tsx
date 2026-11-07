@@ -797,22 +797,6 @@ export default function ProgramsAndOfficesScreen() {
 
   return (
     <View style={s.container}>
-      {/* ─── Breadcrumb Header matching Screenshot 1 ─── */}
-      <View style={s.topBar}>
-        <View style={s.breadcrumbRow}>
-          <Text style={s.brandTitle}>AUDITRACK</Text>
-          <Text style={s.breadcrumbSeparator}>/</Text>
-          <Text style={s.greetingText}>
-            Hello, {currentUser?.firstname || 'Personnel'} {currentUser?.lastname || ''}
-          </Text>
-          <View style={s.roleBadgePill}>
-            <Text style={s.roleBadgeText}>
-              {isAuditor ? 'EXTERNAL AUDITOR' : 'PERSONNEL'}
-            </Text>
-          </View>
-        </View>
-      </View>
-
       <ScrollView
         style={s.scrollContent}
         contentContainerStyle={{ paddingBottom: 60 }}

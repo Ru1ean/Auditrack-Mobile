@@ -642,8 +642,14 @@ export const connect = {
 export const usersAPI = {
   login: async (credentials: any) => await request('/user/login', 'POST', credentials),
   register: async (userData: any) => await request('/user/register', 'POST', userData),
+  loginStatus: async (email: string) =>
+    await request(`/user/login-status?email=${encodeURIComponent(email)}`, 'GET'),
   sendRegistrationOtp: async (data: any) => await request('/user/send-registration-otp', 'POST', data),
   verifyRegistrationOtp: async (data: any) => await request('/user/verify-registration-otp', 'POST', data),
+  sendChangePasswordOtp: async (data: any = {}) =>
+    await request('/user/change-password/send-otp', 'POST', data),
+  verifyAndChangePassword: async (data: any) =>
+    await request('/user/change-password/verify-and-change', 'POST', data),
   changePassword: async (data: any) => await request('/user/change-password', 'PUT', data),
   getLoggedInUser: async () => {
     const res = await request('/user/me', 'GET');

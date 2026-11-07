@@ -718,32 +718,6 @@ export default function RequirementsStandardsScreen() {
 
   return (
     <View style={s.container}>
-      {/* ─── Web Header Breadcrumb Bar ─── */}
-      <View style={s.headerBar}>
-        <View style={s.headerBreadcrumbRow}>
-          <Text style={s.headerAppLabel}>AUDITRACK</Text>
-          <Text style={s.headerBreadcrumbSlash}>/</Text>
-          <Text style={s.headerGreeting} numberOfLines={1}>
-            Hello, {currentUser?.firstname || 'User'} {currentUser?.lastname || ''}
-          </Text>
-          <View
-            style={[
-              s.headerRoleBadge,
-              isAuditor ? s.headerRoleBadgeAuditor : s.headerRoleBadgePersonnel,
-            ]}
-          >
-            <Text
-              style={[
-                s.headerRoleBadgeText,
-                isAuditor ? s.headerRoleBadgeTextAuditor : s.headerRoleBadgeTextPersonnel,
-              ]}
-            >
-              {isAuditor ? 'AUDITOR' : 'PERSONNEL'}
-            </Text>
-          </View>
-        </View>
-      </View>
-
       {/* ─── Main Content Scroll ─── */}
       <ScrollView
         style={{ flex: 1 }}
